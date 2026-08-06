@@ -263,10 +263,7 @@ pub fn memo_decode(input: &str) -> Result<MemoArg, clap::error::Error> {
 		// "invalid value for one of the arguments", which tells the user nothing about the size.
 		return Err(clap::Error::raw(
 			clap::error::ErrorKind::ValueValidation,
-			format!(
-				"memo must be 1..={MAX_MEMO_BYTES} bytes, got {}\n",
-				bytes.len()
-			),
+			format!("memo must be 1..={MAX_MEMO_BYTES} bytes, got {}\n", bytes.len()),
 		));
 	}
 	Ok(MemoArg(bytes))
