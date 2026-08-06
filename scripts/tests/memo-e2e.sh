@@ -72,14 +72,31 @@ echo "   finalized #$finalized"
 dest_addr=$("$TOOLKIT_BIN" show-address --network undeployed --seed "$DEST_SEED" --shielded | tr -d '\n')
 echo "📮 destination: $dest_addr"
 
-echo "✉️  submitting a shielded transfer carrying a memo"
+echo "✍️  building a shielded transfer carrying a memo"
 "$TOOLKIT_BIN" generate-txs \
     -s "ws://$RPC" \
-    -d "ws://$RPC" \
+    --dest-file "$workdir/memo-tx.mn" \
     single-tx \
     --source-seed "$SOURCE_SEED" \
     --output "addr=$dest_addr,amount=100" \
     --memo "$MEMO_HEX" \
+    2>&1 | tee "$workdir/build.log"
+
+# Acceptance alone would not prove the memo travelled: a memo dropped *before* proving yields a
+# perfectly valid memo-less transaction that the node would happily apply. So look for it in the
+# transaction itself. (A memo dropped *after* proving is a different failure, and one the proof
+# catches by itself.) The toolkit writes JSON with the transaction hex-encoded, so the memo
+# appears as its hex rather than as raw bytes.
+echo "🔎 checking the memo is present in the serialized transaction"
+LC_ALL=C grep -qiF "$MEMO_HEX" "$workdir/memo-tx.mn" || {
+    echo "❌ the memo is not in the serialized transaction"; exit 1
+}
+
+echo "✉️  submitting it"
+"$TOOLKIT_BIN" generate-txs \
+    --src-file "$workdir/memo-tx.mn" \
+    -d "ws://$RPC" \
+    send \
     2>&1 | tee "$workdir/memo-tx.log"
 
 # A transaction the node rejected never reaches a block, so finalization is the real signal:
