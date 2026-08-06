@@ -13,7 +13,7 @@
 
 use super::{
 	BuilderContext, DB, Input, Nullifier, ProofPreimage, QualifiedInfo, Segment, ShieldedTokenType,
-	Sp, StdRng, TokenInfo, WalletSeed, WalletState,
+	Sp, StdRng, TokenInfo, WalletSeed, WalletState, shielded_spend,
 };
 use crate::CoinSelectionStrategy;
 use itertools::Itertools;
@@ -29,12 +29,14 @@ pub enum ShieldedCoinSelectionError {
 	ArithmeticOverflow,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct InputInfo<O> {
 	pub origin: O,
 	pub token_type: ShieldedTokenType,
 	pub value: u128,
 	pub nullifier: Option<Nullifier>,
+	/// An optional memo, bound into this spend's proof. Ledger 9 and later only.
+	pub memo: Option<Vec<u8>>,
 }
 
 impl<O> TokenInfo for InputInfo<O> {
@@ -98,6 +100,7 @@ impl InputInfo<WalletSeed> {
 					token_type,
 					value: coin.value,
 					nullifier: Some(nullifier),
+					memo: None,
 				})
 				.collect();
 			Self::select_inputs(matching_inputs, required_value, strategy).ok_or(
@@ -143,11 +146,15 @@ impl<D: DB + Clone, C: BuilderContext<D>> BuildInput<D, C> for InputInfo<WalletS
 			// Update the `InputInfo` value with the actual coin value that is going to be spent
 			self.value = coin.value;
 
-			let (updated_walet, input) = wallet
-				.shielded
-				.state
-				.spend(rng, wallet.shielded.secret_keys(), &coin, Segment::Guaranteed.into())
-				.expect("Failed to spend coin");
+			let (updated_walet, input) = shielded_spend(
+				&wallet.shielded.state,
+				rng,
+				wallet.shielded.secret_keys(),
+				&coin,
+				Segment::Guaranteed.into(),
+				self.memo.clone(),
+			)
+			.expect("Failed to spend coin");
 
 			// Update wallet
 			wallet.shielded.state = updated_walet;
@@ -171,7 +178,13 @@ mod tests {
 	}
 
 	fn make_input(value: u128) -> InputInfo<WalletSeed> {
-		InputInfo { origin: test_seed(), token_type: test_token_type(), value, nullifier: None }
+		InputInfo {
+			origin: test_seed(),
+			token_type: test_token_type(),
+			value,
+			nullifier: None,
+			memo: None,
+		}
 	}
 
 	#[test]

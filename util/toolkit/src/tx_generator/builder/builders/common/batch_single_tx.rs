@@ -133,6 +133,8 @@ impl<C: BuilderContext<DefaultDB>> BatchSingleTxBuilder<C> {
 				source_seed,
 				vec![ShieldedOutputSpec { wallet: dest_wallet, amount, token_type }],
 				coin_selection,
+				// Batch generation is a load-testing path; memos are a single-tx concern.
+				None,
 			)?;
 
 			if offer.outputs.len() > MAX_GUARANTEED_OUTPUTS {

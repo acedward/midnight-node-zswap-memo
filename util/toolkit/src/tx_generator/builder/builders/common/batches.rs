@@ -397,6 +397,7 @@ impl BuildTxs for BatchesBuilder {
 							// All funds that where intially received
 							value: self.coin_amount,
 							nullifier: None,
+							memo: None,
 						};
 						let inputs_info: Vec<Box<dyn BuildInput<DefaultDB, Ctx>>> =
 							vec![Box::new(input_info)];

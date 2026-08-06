@@ -159,6 +159,26 @@ pub mod ledger_7 {
 	pub fn maintenance_verifying_key_ecdsa(_key: VerifyingKeyEcdsa) -> SignatureVerifyingKey {
 		unimplemented!("ecdsa is only supported from ledger 9")
 	}
+
+	/// Spends a shielded coin, optionally attaching a memo authorized by the same secret that
+	/// authorizes the spend.
+	///
+	/// Memos arrived with ledger 9; this generation has no field to carry one, so a caller that
+	/// asks for one here has picked the wrong ledger version rather than hit a runtime condition.
+	pub fn shielded_spend<D: ledger_storage::db::DB>(
+		state: &zswap::local::State<D>,
+		rng: &mut rand::rngs::StdRng,
+		secret_keys: &zswap::keys::SecretKeys,
+		coin: &coin_structure::coin::QualifiedInfo,
+		segment: Option<u16>,
+		memo: Option<Vec<u8>>,
+	) -> Result<
+		(zswap::local::State<D>, zswap::Input<transient_crypto::proofs::ProofPreimage, D>),
+		zswap::error::OfferCreationFailed,
+	> {
+		assert!(memo.is_none(), "zswap input memos require ledger 9 or later");
+		state.spend(rng, secret_keys, coin, segment)
+	}
 }
 
 #[path = "versions"]
@@ -279,6 +299,26 @@ pub mod ledger_8 {
 
 	pub fn maintenance_verifying_key_ecdsa(_key: VerifyingKeyEcdsa) -> SignatureVerifyingKey {
 		unimplemented!("ecdsa is only supported from ledger 9")
+	}
+
+	/// Spends a shielded coin, optionally attaching a memo authorized by the same secret that
+	/// authorizes the spend.
+	///
+	/// Memos arrived with ledger 9; this generation has no field to carry one, so a caller that
+	/// asks for one here has picked the wrong ledger version rather than hit a runtime condition.
+	pub fn shielded_spend<D: ledger_storage::db::DB>(
+		state: &zswap::local::State<D>,
+		rng: &mut rand::rngs::StdRng,
+		secret_keys: &zswap::keys::SecretKeys,
+		coin: &coin_structure::coin::QualifiedInfo,
+		segment: Option<u16>,
+		memo: Option<Vec<u8>>,
+	) -> Result<
+		(zswap::local::State<D>, zswap::Input<transient_crypto::proofs::ProofPreimage, D>),
+		zswap::error::OfferCreationFailed,
+	> {
+		assert!(memo.is_none(), "zswap input memos require ledger 9 or later");
+		state.spend(rng, secret_keys, coin, segment)
 	}
 }
 
@@ -441,6 +481,28 @@ pub mod ledger_9 {
 		key: base_crypto::ecdsa::VerifyingKey,
 	) -> ContractMaintenanceVerifyingKey {
 		ContractMaintenanceVerifyingKey::ECDSA(key)
+	}
+
+	/// Spends a shielded coin, optionally attaching a memo authorized by the same secret that
+	/// authorizes the spend.
+	///
+	/// The memo is committed to in the spend proof's binding input, so it cannot be altered,
+	/// removed, or moved to another input without invalidating the proof. Sizes are validated by
+	/// the caller.
+	pub fn shielded_spend<D: ledger_storage::db::DB>(
+		state: &zswap::local::State<D>,
+		rng: &mut rand::rngs::StdRng,
+		secret_keys: &zswap::keys::SecretKeys,
+		coin: &coin_structure::coin::QualifiedInfo,
+		segment: Option<u16>,
+		memo: Option<Vec<u8>>,
+	) -> Result<
+		(zswap::local::State<D>, zswap::Input<transient_crypto::proofs::ProofPreimage, D>),
+		zswap::error::OfferCreationFailed,
+	> {
+		let memo = memo
+			.map(|bytes| zswap::Memo::new(bytes).expect("memo size should be validated by caller"));
+		state.spend_with_memo(rng, secret_keys, coin, segment, memo)
 	}
 }
 
