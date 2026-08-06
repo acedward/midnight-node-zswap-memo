@@ -320,7 +320,8 @@ pub struct SingleTxArgs {
 	///
 	/// The memo is committed to in the spend proof, so it is authorized by the same secret that
 	/// authorizes the spend and cannot be altered or removed in transit. It rides on the first
-	/// selected input; an offer may carry at most one. Requires ledger 9 or later.
+	/// selected input: one message per spender, rather than the same text repeated on every coin
+	/// this transfer happens to spend. Requires ledger 9 or later.
 	#[arg(long, value_parser = cli::memo_decode)]
 	pub memo: Option<cli::MemoArg>,
 }
