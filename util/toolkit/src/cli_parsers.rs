@@ -248,23 +248,28 @@ pub fn hex_bytes(input: &str) -> Result<Vec<u8>, clap::error::Error> {
 	})
 }
 
+/// A zswap input memo, as raw bytes. A newtype rather than a bare `Vec<u8>` because clap reads
+/// `Vec<T>` as a repeatable argument, which does not match a parser producing the whole value.
+#[derive(Clone, Debug)]
+pub struct MemoArg(pub Vec<u8>);
+
 /// Parses a hex-encoded zswap input memo, enforcing the ledger's size bounds up front so an
 /// oversized memo is a CLI error rather than a panic deep in the builder.
-pub fn memo_decode(input: &str) -> Result<Vec<u8>, clap::error::Error> {
+pub fn memo_decode(input: &str) -> Result<MemoArg, clap::error::Error> {
 	const MAX_MEMO_BYTES: usize = 512;
 	let bytes = hex_bytes(input)?;
 	if bytes.is_empty() || bytes.len() > MAX_MEMO_BYTES {
-		let mut err = clap::Error::new(clap::error::ErrorKind::ValueValidation);
-		err.insert(
-			clap::error::ContextKind::Custom,
-			clap::error::ContextValue::String(format!(
-				"memo must be 1..={MAX_MEMO_BYTES} bytes, got {}",
+		// `Error::raw` rather than a `Custom` context: clap renders the latter as a bare
+		// "invalid value for one of the arguments", which tells the user nothing about the size.
+		return Err(clap::Error::raw(
+			clap::error::ErrorKind::ValueValidation,
+			format!(
+				"memo must be 1..={MAX_MEMO_BYTES} bytes, got {}\n",
 				bytes.len()
-			)),
-		);
-		return Err(err);
+			),
+		));
 	}
-	Ok(bytes)
+	Ok(MemoArg(bytes))
 }
 
 pub fn hex_str_decode<T>(input: &str) -> Result<T, clap::error::Error>

@@ -125,7 +125,7 @@ impl<C: BuilderContext<DefaultDB>> SingleTxBuilder<C> {
 			},
 			rng_seed: args.rng_seed,
 			coin_selection: args.coin_selection,
-			memo: args.memo.clone(),
+			memo: args.memo.clone().map(|m| m.0),
 		}
 	}
 

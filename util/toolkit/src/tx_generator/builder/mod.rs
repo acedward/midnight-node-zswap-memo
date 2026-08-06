@@ -322,7 +322,7 @@ pub struct SingleTxArgs {
 	/// authorizes the spend and cannot be altered or removed in transit. It rides on the first
 	/// selected input; an offer may carry at most one. Requires ledger 9 or later.
 	#[arg(long, value_parser = cli::memo_decode)]
-	pub memo: Option<Vec<u8>>,
+	pub memo: Option<cli::MemoArg>,
 }
 #[derive(Args, Clone, Debug)]
 pub struct RegisterDustAddressArgs {

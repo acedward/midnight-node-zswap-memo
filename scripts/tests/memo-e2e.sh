@@ -50,16 +50,24 @@ cleanup() {
 trap cleanup EXIT
 
 echo "🚀 starting dev node"
-CFG_PRESET=dev "$NODE_BIN" --tmp --rpc-port "${RPC##*:}" >"$workdir/node.log" 2>&1 &
+CFG_PRESET=dev "$NODE_BIN" --dev --tmp --rpc-port "${RPC##*:}" >"$workdir/node.log" 2>&1 &
 node_pid=$!
 
-echo "⏳ waiting for the node to produce a block"
-for _ in $(seq 1 120); do
-    if grep -q "Imported #" "$workdir/node.log" 2>/dev/null; then break; fi
+# The toolkit reconstructs wallet state from finalized blocks, so genesis alone is not enough.
+echo "⏳ waiting for the node to finalize a block beyond genesis"
+finalized=""
+for _ in $(seq 1 180); do
     kill -0 "$node_pid" 2>/dev/null || { echo "node exited early:"; tail -30 "$workdir/node.log"; exit 1; }
-    sleep 1
+    # `|| true`: before the first such line grep exits non-zero, which under `set -e` would
+    # abort the script rather than let the loop poll again.
+    finalized=$(grep -oE "finalized #[0-9]+" "$workdir/node.log" 2>/dev/null | tail -1 | tr -dc '0-9' || true)
+    if [ -n "$finalized" ] && [ "$finalized" -ge 2 ]; then break; fi
+    sleep 2
 done
-grep -q "Imported #" "$workdir/node.log" || { echo "node never produced a block:"; tail -30 "$workdir/node.log"; exit 1; }
+[ -n "$finalized" ] && [ "$finalized" -ge 2 ] || {
+    echo "node never finalized past genesis:"; tail -30 "$workdir/node.log"; exit 1
+}
+echo "   finalized #$finalized"
 
 dest_addr=$("$TOOLKIT_BIN" show-address --network undeployed --seed "$DEST_SEED" --shielded | tr -d '\n')
 echo "📮 destination: $dest_addr"
@@ -74,15 +82,16 @@ echo "✉️  submitting a shielded transfer carrying a memo"
     --memo "$MEMO_HEX" \
     2>&1 | tee "$workdir/memo-tx.log"
 
-# The node applies transactions in a block; a rejected one never reaches that point.
-echo "⏳ confirming the memo transaction was applied"
-for _ in $(seq 1 60); do
-    if grep -qi "error\|rejected\|invalid" "$workdir/memo-tx.log"; then
-        echo "❌ toolkit reported a failure"; exit 1
-    fi
-    sleep 1
-    break
-done
+# A transaction the node rejected never reaches a block, so finalization is the real signal:
+# the node deserialized the memo-carrying transaction, verified its spend proof natively
+# against the memo commitment, and applied it.
+echo "⏳ confirming the memo transaction was finalized"
+grep -q "FINALIZED" "$workdir/memo-tx.log" || {
+    echo "❌ the memo transaction was not finalized:"; tail -20 "$workdir/memo-tx.log"; exit 1
+}
+if grep -qiE "rejected|invalid|panicked" "$workdir/memo-tx.log"; then
+    echo "❌ toolkit reported a failure:"; tail -20 "$workdir/memo-tx.log"; exit 1
+fi
 
 echo "🚫 checking an oversized memo is refused up front"
 if "$TOOLKIT_BIN" generate-txs -s "ws://$RPC" -d "ws://$RPC" single-tx \
