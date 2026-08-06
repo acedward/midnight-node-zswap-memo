@@ -17,7 +17,7 @@ use super::{
 };
 use std::sync::Arc;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct TransientInfo<O, D> {
 	pub input: InputInfo<O>,
 	pub output: OutputInfo<D>,

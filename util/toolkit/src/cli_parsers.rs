@@ -248,6 +248,25 @@ pub fn hex_bytes(input: &str) -> Result<Vec<u8>, clap::error::Error> {
 	})
 }
 
+/// Parses a hex-encoded zswap input memo, enforcing the ledger's size bounds up front so an
+/// oversized memo is a CLI error rather than a panic deep in the builder.
+pub fn memo_decode(input: &str) -> Result<Vec<u8>, clap::error::Error> {
+	const MAX_MEMO_BYTES: usize = 512;
+	let bytes = hex_bytes(input)?;
+	if bytes.is_empty() || bytes.len() > MAX_MEMO_BYTES {
+		let mut err = clap::Error::new(clap::error::ErrorKind::ValueValidation);
+		err.insert(
+			clap::error::ContextKind::Custom,
+			clap::error::ContextValue::String(format!(
+				"memo must be 1..={MAX_MEMO_BYTES} bytes, got {}",
+				bytes.len()
+			)),
+		);
+		return Err(err);
+	}
+	Ok(bytes)
+}
+
 pub fn hex_str_decode<T>(input: &str) -> Result<T, clap::error::Error>
 where
 	T: TryFrom<Vec<u8>, Error = Vec<u8>>,

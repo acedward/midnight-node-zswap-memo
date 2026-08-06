@@ -61,6 +61,7 @@ pub struct SingleTxBuilder<C: BuilderContext<DefaultDB>> {
 	input_utxos: Vec<UtxoId>,
 	rng_seed: Option<[u8; 32]>,
 	coin_selection: CoinSelectionStrategy,
+	memo: Option<Vec<u8>>,
 }
 
 impl<C: BuilderContext<DefaultDB>> SingleTxBuilder<C> {
@@ -124,6 +125,7 @@ impl<C: BuilderContext<DefaultDB>> SingleTxBuilder<C> {
 			},
 			rng_seed: args.rng_seed,
 			coin_selection: args.coin_selection,
+			memo: args.memo.clone(),
 		}
 	}
 
@@ -156,6 +158,7 @@ impl<C: BuilderContext<DefaultDB>> BuildTxs for SingleTxBuilder<C> {
 				self.source_seed.clone(),
 				self.shielded_outputs.iter().map(clone_shielded_spec).collect(),
 				self.coin_selection,
+				self.memo.clone(),
 			)?;
 			if offer.outputs.len() > MAX_GUARANTEED_OUTPUTS {
 				tx_info.set_fallible_offers(HashMap::from([(1, offer)]));
@@ -207,6 +210,7 @@ pub(crate) fn build_shielded_offer<C: BuilderContext<DefaultDB>>(
 	funding_seed: WalletSeed,
 	outputs: Vec<ShieldedOutputSpec<DefaultDB>>,
 	coin_selection: CoinSelectionStrategy,
+	memo: Option<Vec<u8>>,
 ) -> Result<OfferInfo<DefaultDB, C>, ShieldedCoinSelectionError> {
 	// Sum amounts per token type, in the order each token type first appears so
 	// behaviour is deterministic for callers.
@@ -246,7 +250,11 @@ pub(crate) fn build_shielded_offer<C: BuilderContext<DefaultDB>>(
 			coin_selection,
 		)?;
 
-		for input in token_inputs {
+		for mut input in token_inputs {
+			// At most one memo per offer, so it rides on the first selected input.
+			if inputs_info.is_empty() {
+				input.memo = memo.clone();
+			}
 			let input: Box<dyn BuildInput<DefaultDB, C>> = Box::new(input);
 			inputs_info.push(input);
 		}
@@ -407,7 +415,7 @@ mod tests {
 		];
 
 		let result =
-			build_shielded_offer(context, test_seed(), outputs, CoinSelectionStrategy::default());
+			build_shielded_offer(context, test_seed(), outputs, CoinSelectionStrategy::default(), None);
 
 		assert!(matches!(result, Err(ShieldedCoinSelectionError::ArithmeticOverflow)));
 	}

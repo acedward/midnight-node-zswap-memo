@@ -18,7 +18,7 @@ pub use super::{
 	MaintenanceVerifyingKey, SignatureVerifyingKey, SigningKeyEcdsa,
 	TransactionSignature as Signature, TransactionSigningKey, VerifyingKeyEcdsa,
 	contract_operation_new, maintenance_verifying_key, maintenance_verifying_key_ecdsa,
-	signature_verifying_key, signature_verifying_key_ecdsa, transaction_signature,
+	shielded_spend, signature_verifying_key, signature_verifying_key_ecdsa, transaction_signature,
 	transaction_signature_ecdsa, transaction_signing_key, transaction_signing_key_ecdsa,
 };
 pub use super::{

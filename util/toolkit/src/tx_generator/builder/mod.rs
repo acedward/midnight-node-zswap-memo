@@ -316,6 +316,13 @@ pub struct SingleTxArgs {
 	/// `largest-first` minimizes the number of inputs; `smallest-first` consolidates dust.
 	#[arg(long, value_parser = cli::coin_selection_strategy, default_value = "largest-first")]
 	pub coin_selection: CoinSelectionStrategy,
+	/// Attach a memo to the shielded spend, as hex (1..=512 bytes).
+	///
+	/// The memo is committed to in the spend proof, so it is authorized by the same secret that
+	/// authorizes the spend and cannot be altered or removed in transit. It rides on the first
+	/// selected input; an offer may carry at most one. Requires ledger 9 or later.
+	#[arg(long, value_parser = cli::memo_decode)]
+	pub memo: Option<Vec<u8>>,
 }
 #[derive(Args, Clone, Debug)]
 pub struct RegisterDustAddressArgs {

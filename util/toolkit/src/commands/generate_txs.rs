@@ -154,6 +154,7 @@ mod tests {
 		input_utxos: vec![],
 		rng_seed: None,
 		coin_selection: CoinSelectionStrategy::LargestFirst,
+		memo: None,
 	}), ["genesis/genesis_block_undeployed.mn"]) =>
 	   matches Ok(..);
 		"single-tx"
