@@ -26,9 +26,13 @@ Ledger side (`midnight-zswap`, `midnight-ledger-v9`):
   the two cannot drift — a divergence there would be a chain split, not a local bug.
 - New public `State::spend_with_memo`; the existing `spend` is unchanged.
 - Rejected: memos on contract-owned inputs (a contract spend proves no user secret, so the
-  authorization claim would not hold), empty memos (so "no memo" has one representation), and
-  more than one memo per offer (so a memo injected into a republished offer by a third party
-  cannot be read as the maker's).
+  authorization claim would not hold) and empty memos (so "no memo" has one representation).
+- An offer may carry a memo per input, and the ledger does not nominate one of them as "the
+  offer's" message. Each memo is bound to its own input's proof and nullifier, so authorship is
+  already unambiguous, and merging is the settlement mechanism — batch settlement merges many
+  parties' offers into one transaction and each party may have something to say. Requiring
+  exactly one memo belongs to layers where a single author is actually implied, such as a
+  published offer file.
 - Memo bytes are priced through the existing serialized-size accounting; a `TODO` marks the
   verifier-side hashing cost as uncalibrated.
 
