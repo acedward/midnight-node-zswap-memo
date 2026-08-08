@@ -27,6 +27,8 @@ pub enum ShieldedCoinSelectionError {
 	InsufficientBalance { required: u128, token_type: ShieldedTokenType, seed: WalletSeed },
 	#[error("arithmetic overflow in shielded coin selection")]
 	ArithmeticOverflow,
+	#[error("a memo was supplied but no shielded input was selected to carry it")]
+	MemoNotAttached,
 }
 
 #[derive(Clone)]
