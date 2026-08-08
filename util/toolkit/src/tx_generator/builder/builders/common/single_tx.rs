@@ -16,6 +16,7 @@ use std::{
 	sync::Arc,
 };
 
+use super::ledger_helpers_local::LEDGER_VERSION;
 use super::ledger_helpers_local::{
 	BuildInput, BuildIntent, BuildOutput, BuildUtxoOutput, BuildUtxoSpend, BuilderContext,
 	CoinSelectionStrategy, DefaultDB, FromContext as _, InputInfo, IntentInfo, OfferInfo,
@@ -49,6 +50,16 @@ pub enum SingleTxError {
 	ProvingFailed(String),
 	#[error("transaction is empty: no valid destination addresses were resolved into outputs")]
 	EmptyTransaction,
+	#[error(
+		"--memo requires ledger 9 or later, but this transaction targets ledger {version}; \
+		 earlier ledgers have no field to carry a memo"
+	)]
+	MemoUnsupportedLedger { version: u32 },
+	#[error(
+		"--memo applies to the shielded spend, but this transaction has no shielded output; \
+		 add a shielded --output or drop --memo"
+	)]
+	MemoWithoutShieldedSpend,
 }
 
 pub struct SingleTxBuilder<C: BuilderContext<DefaultDB>> {
@@ -152,6 +163,17 @@ impl<C: BuilderContext<DefaultDB>> BuildTxs for SingleTxBuilder<C> {
 			self.rng_seed,
 		);
 
+		if let Some(memo) = self.memo.as_ref() {
+			// A memo rides on a shielded input, so these combinations would silently discard it.
+			if LEDGER_VERSION < 9 {
+				return Err(SingleTxError::MemoUnsupportedLedger { version: LEDGER_VERSION });
+			}
+			if self.shielded_outputs.is_empty() {
+				log::error!("--memo given ({} bytes) but no shielded output", memo.len());
+				return Err(SingleTxError::MemoWithoutShieldedSpend);
+			}
+		}
+
 		if !self.shielded_outputs.is_empty() {
 			let offer = build_shielded_offer(
 				context.clone(),
@@ -228,6 +250,7 @@ pub(crate) fn build_shielded_offer<C: BuilderContext<DefaultDB>>(
 
 	let mut inputs_info: Vec<Box<dyn BuildInput<DefaultDB, C>>> = Vec::new();
 	let mut outputs_info: Vec<Box<dyn BuildOutput<DefaultDB, C>>> = Vec::new();
+	let mut memo_attached = false;
 
 	// User outputs first, in the order they were given.
 	for spec in outputs {
@@ -251,9 +274,11 @@ pub(crate) fn build_shielded_offer<C: BuilderContext<DefaultDB>>(
 		)?;
 
 		for mut input in token_inputs {
-			// At most one memo per offer, so it rides on the first selected input.
+			// One message per spender: it rides on the first selected input rather than being
+			// repeated on every coin this transfer happens to spend.
 			if inputs_info.is_empty() {
 				input.memo = memo.clone();
+				memo_attached = memo.is_some();
 			}
 			let input: Box<dyn BuildInput<DefaultDB, C>> = Box::new(input);
 			inputs_info.push(input);
@@ -269,6 +294,11 @@ pub(crate) fn build_shielded_offer<C: BuilderContext<DefaultDB>>(
 		}
 	}
 	log::debug!("[perf] select_shielded_offer took {:?}", select_start.elapsed());
+
+	// Fail loudly rather than hand back an offer quietly missing the memo that was asked for.
+	if memo.is_some() && !memo_attached {
+		return Err(ShieldedCoinSelectionError::MemoNotAttached);
+	}
 
 	Ok(OfferInfo { inputs: inputs_info, outputs: outputs_info, transients: vec![] })
 }
