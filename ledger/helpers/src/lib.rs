@@ -39,6 +39,18 @@ pub enum CoinSelectionStrategy {
 /// To be deserialized when constructing ContractOperations
 pub struct ContractVerifyingKeyBytes(pub Vec<u8>);
 
+/// Raised when a shielded spend cannot be constructed as asked.
+///
+/// Memos arrived with ledger 9. Earlier generations have no field to carry one, so asking for a
+/// memo there is refused rather than panicking or silently dropping the message.
+#[derive(Debug, thiserror::Error)]
+pub enum ShieldedSpendError {
+	#[error("zswap input memos require ledger 9 or later, but this is ledger {version}")]
+	MemoUnsupportedLedger { version: u32 },
+	#[error("{0}")]
+	OfferCreation(String),
+}
+
 #[path = "versions"]
 pub mod ledger_7 {
 	use crate::ContractVerifyingKeyBytes;
@@ -163,8 +175,8 @@ pub mod ledger_7 {
 	/// Spends a shielded coin, optionally attaching a memo authorized by the same secret that
 	/// authorizes the spend.
 	///
-	/// Memos arrived with ledger 9; this generation has no field to carry one, so a caller that
-	/// asks for one here has picked the wrong ledger version rather than hit a runtime condition.
+	/// Memos arrived with ledger 9; this generation has no field to carry one, so asking for one
+	/// here is refused with a typed error rather than panicking or dropping the message.
 	pub fn shielded_spend<D: ledger_storage::db::DB>(
 		state: &zswap::local::State<D>,
 		rng: &mut rand::rngs::StdRng,
@@ -174,10 +186,16 @@ pub mod ledger_7 {
 		memo: Option<Vec<u8>>,
 	) -> Result<
 		(zswap::local::State<D>, zswap::Input<transient_crypto::proofs::ProofPreimage, D>),
-		zswap::error::OfferCreationFailed,
+		crate::ShieldedSpendError,
 	> {
-		assert!(memo.is_none(), "zswap input memos require ledger 9 or later");
-		state.spend(rng, secret_keys, coin, segment)
+		if memo.is_some() {
+			return Err(crate::ShieldedSpendError::MemoUnsupportedLedger {
+				version: LEDGER_VERSION,
+			});
+		}
+		state
+			.spend(rng, secret_keys, coin, segment)
+			.map_err(|e| crate::ShieldedSpendError::OfferCreation(e.to_string()))
 	}
 }
 
@@ -304,8 +322,8 @@ pub mod ledger_8 {
 	/// Spends a shielded coin, optionally attaching a memo authorized by the same secret that
 	/// authorizes the spend.
 	///
-	/// Memos arrived with ledger 9; this generation has no field to carry one, so a caller that
-	/// asks for one here has picked the wrong ledger version rather than hit a runtime condition.
+	/// Memos arrived with ledger 9; this generation has no field to carry one, so asking for one
+	/// here is refused with a typed error rather than panicking or dropping the message.
 	pub fn shielded_spend<D: ledger_storage::db::DB>(
 		state: &zswap::local::State<D>,
 		rng: &mut rand::rngs::StdRng,
@@ -315,10 +333,16 @@ pub mod ledger_8 {
 		memo: Option<Vec<u8>>,
 	) -> Result<
 		(zswap::local::State<D>, zswap::Input<transient_crypto::proofs::ProofPreimage, D>),
-		zswap::error::OfferCreationFailed,
+		crate::ShieldedSpendError,
 	> {
-		assert!(memo.is_none(), "zswap input memos require ledger 9 or later");
-		state.spend(rng, secret_keys, coin, segment)
+		if memo.is_some() {
+			return Err(crate::ShieldedSpendError::MemoUnsupportedLedger {
+				version: LEDGER_VERSION,
+			});
+		}
+		state
+			.spend(rng, secret_keys, coin, segment)
+			.map_err(|e| crate::ShieldedSpendError::OfferCreation(e.to_string()))
 	}
 }
 
@@ -498,11 +522,13 @@ pub mod ledger_9 {
 		memo: Option<Vec<u8>>,
 	) -> Result<
 		(zswap::local::State<D>, zswap::Input<transient_crypto::proofs::ProofPreimage, D>),
-		zswap::error::OfferCreationFailed,
+		crate::ShieldedSpendError,
 	> {
 		let memo = memo
 			.map(|bytes| zswap::Memo::new(bytes).expect("memo size should be validated by caller"));
-		state.spend_with_memo(rng, secret_keys, coin, segment, memo)
+		state
+			.spend_with_memo(rng, secret_keys, coin, segment, memo)
+			.map_err(|e| crate::ShieldedSpendError::OfferCreation(e.to_string()))
 	}
 }
 

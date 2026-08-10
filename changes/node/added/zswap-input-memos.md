@@ -1,5 +1,22 @@
 #node #ledger #zswap
-# Add authenticated memos to ZSwap inputs
+# Add authenticated memos to ZSwap inputs (fresh-chain dev prototype)
+
+**Scope: a fresh-chain dev/undeployed-network prototype.** It is not an upgrade path. Explicit
+non-goals, each a production blocker rather than an oversight:
+
+- **No `transaction[v12]` decoding or replay.** The updated ledger reads `[v13]` only, and there
+  is no prior-version decoder. Start from freshly generated dev/undeployed genesis; do not point
+  this build at an existing Ledger9 chain, and do not expect it to cold-replay one.
+- **No activation boundary.** Every participating node and toolkit client must run the updated
+  ledger. There is no version-gated switchover.
+- **No deployed-network support.** Only `dev`/`undeployed` fixtures were regenerated.
+- **No wallet, SDK, or `ledger-wasm` surface.** The memo is reachable from Rust and the toolkit
+  only, so wallets cannot yet read or set one.
+- **No calibrated cost for memo verification.** Memo bytes are charged through serialized size;
+  the verifier-side hashing (`1 + ceil(len/31)` field elements per memo) is not in the cost
+  model. Sufficient for a bounded prototype, not for production.
+
+Tracked as production blockers: v12→v13 transition support, and memo-hashing cost calibration.
 
 Shielded offers can now carry a message that is authenticated by the same secret that
 authorizes the spend, without revealing a public key. This is the primitive MIP-0006 wanted
@@ -36,8 +53,8 @@ Ledger side (`midnight-zswap`, `midnight-ledger-v9`):
 - Memo bytes are priced through the existing serialized-size accounting; a `TODO` marks the
   verifier-side hashing cost as uncalibrated.
 
-This is a backwards-incompatible wire and validity change, so it requires a coordinated
-upgrade: tags bump `zswap-input[v2]→[v3]`, `zswap-offer[v5]→[v6]`,
+This is a backwards-incompatible wire and validity change. Delivering it to any existing network
+would require a coordinated upgrade, which this prototype does not provide: tags bump `zswap-input[v2]→[v3]`, `zswap-offer[v5]→[v6]`,
 `standard-transaction[v12]→[v13]`, `transaction[v12]→[v13]`. Transactions without memos verify
 identically under both rule sets, so history stays valid. Verification runs natively in the
 node via the ledger host functions, not in the runtime wasm, so no runtime API or metadata

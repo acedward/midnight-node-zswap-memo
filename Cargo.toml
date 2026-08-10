@@ -465,15 +465,16 @@ parity-db = { git = "https://github.com/midnightntwrk/parity-db.git", branch = "
 # they resolve everything else through the entries below and from crates.io — leaving the rest of
 # the dependency graph byte-identical to the released build.
 #
-# Pinned to an immutable `rev` rather than a branch or a local path, so the build is reproducible
-# and portable rather than valid only on one machine. The repository is currently a private
-# checkpoint mirror; repoint it at the upstream fork once the branch lands somewhere shared.
+# Pinned to an immutable `rev` on the *integration* ref: the feature branch plus the
+# release-isolation edits (trimmed workspace, internal path deps stripped) that the per-crate
+# release tags carry. Develop on `feat/zswap-input-memo`, which is source-only and reviewable
+# against upstream; consume this. The repository is currently a private checkpoint mirror.
 #
 # Do NOT also patch `midnight-storage` or `midnight-storage-core` to that source: the published
 # 1.2.0 storage-core differs from the same-versioned source there, and forcing it breaks the
 # ledger-7 `midnight-storage 1.1.1` that still resolves from crates.io.
-midnight-ledger-v9            = { git = "https://github.com/acedward/midnight-ledger-zswap-memo", rev = "77c7a46646874f883faa5dc2e258126aedcce9d3" }
-midnight-zswap                = { git = "https://github.com/acedward/midnight-ledger-zswap-memo", rev = "77c7a46646874f883faa5dc2e258126aedcce9d3" }
+midnight-ledger-v9            = { git = "https://github.com/acedward/midnight-ledger-zswap-memo", rev = "22a51254d4290a1d409c4ad949e56fb304e3f41c" }
+midnight-zswap                = { git = "https://github.com/acedward/midnight-ledger-zswap-memo", rev = "22a51254d4290a1d409c4ad949e56fb304e3f41c" }
 midnight-coin-structure       = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "coin-structure-3.0.0-rc.1" }
 midnight-base-crypto          = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "base-crypto-1.1.0-rc.2" }
 midnight-base-crypto-derive   = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "base-crypto-derive-1.1.0-rc.2" }
