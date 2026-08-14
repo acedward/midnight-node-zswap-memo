@@ -128,5 +128,11 @@ pub mod undeployed {
 		#[cfg(feature = "test")]
 		pub const CLAIM_MINT_TX: &[u8] =
 			include_bytes!("../test-claim-mint/claim_mint_undeployed.mn");
+		/// A raw `midnight:transaction[v12]`-tagged transaction, extracted from the
+		/// pre-memo fixture set (node history at `bd79beb0`, before the `[v13]` regeneration).
+		/// Kept so the v12->v13 transition work has a genuine old-format specimen: today's
+		/// reader must fail on it *cleanly*, and a future prior-version decoder must accept it.
+		#[cfg(feature = "test")]
+		pub const RAW_TX_V12: &[u8] = include_bytes!("../test-tx-deserialize/raw_tx_v12.bin");
 	}
 }
