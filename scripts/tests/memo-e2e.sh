@@ -91,8 +91,9 @@ echo "🔎 decoding the transaction and checking the memo is on an input"
 "$TOOLKIT_BIN" show-transaction --src-file "$workdir/memo-tx.mn" >"$workdir/decoded.txt" 2>&1 || {
     echo "❌ could not decode the generated transaction:"; tail -20 "$workdir/decoded.txt"; exit 1
 }
-LC_ALL=C grep -qiE "shielded input .*memo\($((${#MEMO_HEX} / 2)) bytes\): $MEMO_HEX" "$workdir/decoded.txt" || {
-    echo "❌ the decoded transaction has no input carrying the memo:"
+memo_carriers=$(LC_ALL=C grep -ciE "shielded input .*memo\($((${#MEMO_HEX} / 2)) bytes\): $MEMO_HEX" "$workdir/decoded.txt" || true)
+[ "$memo_carriers" -eq 1 ] || {
+    echo "❌ expected exactly one input carrying the memo, found $memo_carriers:"
     grep -io "shielded input[^\"]*" "$workdir/decoded.txt" | head -5
     exit 1
 }
@@ -140,5 +141,11 @@ check_rejected "non-hex memo"     "invalid hex|memo"    --output "addr=$dest_add
 # A memo rides on a shielded spend; with only an unshielded output there is nothing to carry it,
 # and this used to be discarded in silence.
 check_rejected "unshielded-only"  "no shielded output"  --unshielded-amount 500 --destination-address "$unshielded_addr" --memo "$MEMO_HEX"
+# A syntactically valid memo request with no destination used to reach `SingleTxBuilder::new` and
+# panic before the memo/carrier preflight could return its typed error.
+check_rejected "no destination"   "no shielded output"  --memo "$MEMO_HEX"
+# The dev genesis wallet is funded, but not enough to cover this deliberately excessive request.
+# This exercises the live no-selected-input path rather than only its unit-level selector.
+check_rejected "no selected input" "insufficient shielded coins" --output "addr=$dest_addr,amount=100000000000000000" --memo "$MEMO_HEX"
 
-echo "✅ memo decoded on its input, transaction finalized, invalid requests rejected"
+echo "✅ memo decoded on exactly one input, transaction finalized, 7 invalid requests rejected"

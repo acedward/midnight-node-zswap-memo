@@ -132,7 +132,7 @@ impl<D: DB + Clone, C: BuilderContext<D>> BuildInput<D, C> for EncodedInputInfo<
 		&mut self,
 		rng: &mut rand::prelude::StdRng,
 		_context: Arc<C>,
-	) -> Input<ProofPreimage, D> {
+	) -> Result<Input<ProofPreimage, D>, midnight_node_ledger_helpers::ShieldedSpendError> {
 		Input::new_contract_owned(
 			rng,
 			&(&self.encoded_qualified_info).into(),
@@ -140,7 +140,9 @@ impl<D: DB + Clone, C: BuilderContext<D>> BuildInput<D, C> for EncodedInputInfo<
 			self.contract_address,
 			&self.chain_zswap_state.coin_coms,
 		)
-		.expect("Failed to construct Input")
+		.map_err(|error| {
+			midnight_node_ledger_helpers::ShieldedSpendError::OfferCreation(error.to_string())
+		})
 	}
 }
 

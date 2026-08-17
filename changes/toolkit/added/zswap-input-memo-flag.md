@@ -14,14 +14,23 @@ silently dropping it.
 Every way of asking for a memo that cannot be honoured now fails with its own message rather
 than dropping it silently: pre-ledger-9 generations, a transaction with no shielded spend to
 carry it, a memo outside 1..=512 bytes, invalid hex, and the defensive case where coin selection
-yields no input. `scripts/tests/memo-e2e.sh` covers all of these against a live dev node, and
-decodes the generated transaction to assert the memo is attached to an input before submitting
-— finalization alone would not prove it, since a silently dropped memo still yields a valid
-transaction.
+yields no input. Direct construction and coin selection also return a typed error when the source
+wallet is not registered in the builder context, rather than panicking while holding the context
+mutex. Unit tests cover the generation-dispatch and selector details;
+`scripts/tests/memo-e2e.sh` covers the user-facing invalid encodings, unshielded-only and
+no-destination shapes, and a funded-wallet no-selection request against a live dev node. It also
+decodes the generated transaction to assert the memo is attached to exactly one input before
+submitting—finalization alone would not prove that, since a silently dropped memo still yields a
+valid transaction.
 
-Plumbing: `InputInfo` gains a `memo` field (and consequently is no longer `Copy`), and each
-ledger generation supplies a `shielded_spend` shim so the shared builder code compiles against
-all three, returning a typed `ShieldedSpendError` instead of asserting.
+Plumbing: `InputInfo` gains a `memo` field (and consequently is no longer `Copy`), `BuildInput`
+is fallible, and each ledger generation supplies a `shielded_spend` shim so the shared builder
+code compiles against all three. `BuilderContext` gains a backwards-compatible fallible
+single-wallet lookup, while `ShieldedSpendError` and `ShieldedCoinSelectionError` gain a
+`SourceWalletNotFound` variant. Memo bytes and carrier-placement fields are checked/private in
+the ledger API, and inspection only labels a memo authenticated after full validation and the
+carrying segment's successful application. These are source- and validity-visible breaking changes
+and require the coordinated release warning recorded in the project plan.
 
 Scope: part of the fresh-chain dev/undeployed-network prototype described in the node change
 file. Requires ledger 9 or later, and offers no wallet or SDK surface.

@@ -13,7 +13,7 @@
 
 use super::{
 	BuilderContext, DB, Input, Nullifier, ProofPreimage, QualifiedInfo, Segment, ShieldedTokenType,
-	Sp, StdRng, TokenInfo, WalletSeed, WalletState, shielded_spend,
+	Sp, StdRng, TokenInfo, WalletSeed, WalletState, shielded_spend, validate_shielded_memo,
 };
 use crate::CoinSelectionStrategy;
 use itertools::Itertools;
@@ -29,6 +29,8 @@ pub enum ShieldedCoinSelectionError {
 	ArithmeticOverflow,
 	#[error("a memo was supplied but no shielded input was selected to carry it")]
 	MemoNotAttached,
+	#[error("source shielded wallet is not registered in the builder context")]
+	SourceWalletNotFound,
 }
 
 #[derive(Clone)]
@@ -51,11 +53,23 @@ impl<O> TokenInfo for InputInfo<O> {
 }
 
 pub trait BuildInput<D: DB + Clone, C: BuilderContext<D>>: TokenInfo + Send + Sync {
-	fn build(&mut self, rng: &mut StdRng, context: Arc<C>) -> Input<ProofPreimage, D>;
+	fn build(
+		&mut self,
+		rng: &mut StdRng,
+		context: Arc<C>,
+	) -> Result<Input<ProofPreimage, D>, crate::ShieldedSpendError>;
 }
 
 impl InputInfo<WalletSeed> {
-	pub fn min_match_coin<D: DB + Clone>(&self, wallet: &WalletState<D>) -> Sp<QualifiedInfo, D> {
+	/// Find the least-valued coin satisfying this direct input request.
+	///
+	/// This is fallible because `InputInfo` is a public construction API: an empty wallet, an
+	/// absent token, or a stale exact nullifier is ordinary input failure and must not abort the
+	/// calling process.
+	pub fn min_match_coin<D: DB + Clone>(
+		&self,
+		wallet: &WalletState<D>,
+	) -> Result<Sp<QualifiedInfo, D>, crate::ShieldedSpendError> {
 		let coins = wallet
 			.coins
 			.iter()
@@ -70,15 +84,13 @@ impl InputInfo<WalletSeed> {
 			.sorted_by_key(|coin| coin.value)
 			.collect::<Vec<Sp<QualifiedInfo, D>>>();
 
-		coins
-			.first()
-			.unwrap_or_else(|| {
-				panic!(
-					"There is no single UTXO with {:?} and amount >= {:?} to spend by {:?}",
-					self.token_type, self.value, wallet
-				)
-			})
-			.clone()
+		coins.first().cloned().ok_or_else(|| {
+			if self.nullifier.is_some() {
+				crate::ShieldedSpendError::ShieldedCoinNotFoundByNullifier
+			} else {
+				crate::ShieldedSpendError::NoMatchingShieldedCoin { minimum_value: self.value }
+			}
+		})
 	}
 
 	/// Returns a vector of InputInfo matching coins selected from the wallet to cover
@@ -90,29 +102,31 @@ impl InputInfo<WalletSeed> {
 		token_type: ShieldedTokenType,
 		strategy: CoinSelectionStrategy,
 	) -> Result<(Vec<InputInfo<WalletSeed>>, u128), ShieldedCoinSelectionError> {
-		context.with_wallet_from_seed(seed.clone(), |wallet| {
-			let matching_inputs: Vec<InputInfo<WalletSeed>> = wallet
-				.shielded
-				.state
-				.coins
-				.iter()
-				.filter(|(_nullifier, coin)| coin.type_ == token_type)
-				.map(|(nullifier, coin)| InputInfo {
-					origin: seed.clone(),
-					token_type,
-					value: coin.value,
-					nullifier: Some(nullifier),
-					memo: None,
-				})
-				.collect();
-			Self::select_inputs(matching_inputs, required_value, strategy).ok_or(
-				ShieldedCoinSelectionError::InsufficientBalance {
-					required: required_value,
-					token_type,
-					seed: seed.clone(),
-				},
-			)
-		})
+		context
+			.try_with_wallet_from_seed(seed.clone(), |wallet| {
+				let matching_inputs: Vec<InputInfo<WalletSeed>> = wallet
+					.shielded
+					.state
+					.coins
+					.iter()
+					.filter(|(_nullifier, coin)| coin.type_ == token_type)
+					.map(|(nullifier, coin)| InputInfo {
+						origin: seed.clone(),
+						token_type,
+						value: coin.value,
+						nullifier: Some(nullifier),
+						memo: None,
+					})
+					.collect();
+				Self::select_inputs(matching_inputs, required_value, strategy).ok_or(
+					ShieldedCoinSelectionError::InsufficientBalance {
+						required: required_value,
+						token_type,
+						seed: seed.clone(),
+					},
+				)
+			})
+			.ok_or(ShieldedCoinSelectionError::SourceWalletNotFound)?
 	}
 
 	/// From given `inputs` select coins totaling at least `required`, ordered by `strategy`.
@@ -141,34 +155,43 @@ impl InputInfo<WalletSeed> {
 }
 
 impl<D: DB + Clone, C: BuilderContext<D>> BuildInput<D, C> for InputInfo<WalletSeed> {
-	fn build(&mut self, rng: &mut StdRng, context: Arc<C>) -> Input<ProofPreimage, D> {
-		context.with_wallet_from_seed(self.origin.clone(), |wallet| {
-			let coin: Sp<QualifiedInfo, D> = self.min_match_coin(&wallet.shielded.state);
+	fn build(
+		&mut self,
+		rng: &mut StdRng,
+		context: Arc<C>,
+	) -> Result<Input<ProofPreimage, D>, crate::ShieldedSpendError> {
+		// Validate before looking up a coin. A malformed or unsupported memo is an ordinary bad
+		// request and must return its typed error even if the wallet is empty.
+		validate_shielded_memo(self.memo.as_deref())?;
+		context
+			.try_with_wallet_from_seed(self.origin.clone(), |wallet| {
+				let coin: Sp<QualifiedInfo, D> = self.min_match_coin(&wallet.shielded.state)?;
 
-			// Update the `InputInfo` value with the actual coin value that is going to be spent
-			self.value = coin.value;
+				// Update the `InputInfo` value with the actual coin value that is going to be spent
+				self.value = coin.value;
 
-			let (updated_walet, input) = shielded_spend(
-				&wallet.shielded.state,
-				rng,
-				wallet.shielded.secret_keys(),
-				&coin,
-				Segment::Guaranteed.into(),
-				self.memo.clone(),
-			)
-			.expect("Failed to spend coin");
+				let (updated_walet, input) = shielded_spend(
+					&wallet.shielded.state,
+					rng,
+					wallet.shielded.secret_keys(),
+					&coin,
+					Segment::Guaranteed.into(),
+					self.memo.clone(),
+				)?;
 
-			// Update wallet
-			wallet.shielded.state = updated_walet;
+				// Update wallet
+				wallet.shielded.state = updated_walet;
 
-			input
-		})
+				Ok(input)
+			})
+			.ok_or(crate::ShieldedSpendError::SourceWalletNotFound)?
 	}
 }
 
 #[cfg(test)]
 mod tests {
-	use super::super::HashOutput;
+	use super::super::super::LEDGER_VERSION;
+	use super::super::{DefaultDB, HashOutput, LedgerContext, SeedableRng};
 	use super::*;
 
 	fn test_seed() -> WalletSeed {
@@ -186,6 +209,118 @@ mod tests {
 			value,
 			nullifier: None,
 			memo: None,
+		}
+	}
+
+	#[test]
+	fn invalid_or_unsupported_memo_is_typed_before_wallet_lookup() {
+		// `LedgerContext::new` deliberately contains no wallet for `test_seed`. If `build` looks the
+		// wallet up before validating the memo, this test panics instead of returning the typed error.
+		for memo in [Vec::new(), vec![0u8; 513]] {
+			let context = Arc::new(LedgerContext::<DefaultDB>::new("test"));
+			let mut input = make_input(1);
+			input.memo = Some(memo);
+			let mut rng = StdRng::from_seed([0u8; 32]);
+			let result: Result<Input<ProofPreimage, DefaultDB>, crate::ShieldedSpendError> =
+				input.build(&mut rng, context);
+
+			match LEDGER_VERSION {
+				7 | 8 => assert!(matches!(
+					result,
+					Err(crate::ShieldedSpendError::MemoUnsupportedLedger { version })
+						if version == LEDGER_VERSION
+				)),
+				9 => assert!(matches!(result, Err(crate::ShieldedSpendError::InvalidMemo(_)))),
+				version => panic!("test does not define memo support for ledger {version}"),
+			}
+		}
+	}
+
+	#[test]
+	fn valid_memo_with_an_empty_source_wallet_returns_a_typed_coin_error() {
+		let context =
+			Arc::new(LedgerContext::<DefaultDB>::new_from_wallet_seeds("test", &[test_seed()]));
+		let mut input = make_input(1);
+		input.memo = Some(vec![0x42]);
+		let mut rng = StdRng::from_seed([0u8; 32]);
+		let result: Result<Input<ProofPreimage, DefaultDB>, crate::ShieldedSpendError> =
+			input.build(&mut rng, context);
+
+		match LEDGER_VERSION {
+			7 | 8 => assert!(matches!(
+				result,
+				Err(crate::ShieldedSpendError::MemoUnsupportedLedger { version })
+					if version == LEDGER_VERSION
+			)),
+			9 => assert!(matches!(
+				result,
+				Err(crate::ShieldedSpendError::NoMatchingShieldedCoin { minimum_value: 1 })
+			)),
+			version => panic!("test does not define memo support for ledger {version}"),
+		}
+	}
+
+	#[test]
+	fn valid_memo_with_an_unregistered_source_wallet_returns_a_typed_error() {
+		let context = Arc::new(LedgerContext::<DefaultDB>::new("test"));
+		let mut input = make_input(1);
+		input.memo = Some(vec![0x42]);
+		let mut rng = StdRng::from_seed([0u8; 32]);
+		let result: Result<Input<ProofPreimage, DefaultDB>, crate::ShieldedSpendError> =
+			input.build(&mut rng, context.clone());
+
+		match LEDGER_VERSION {
+			7 | 8 => assert!(matches!(
+				result,
+				Err(crate::ShieldedSpendError::MemoUnsupportedLedger { version })
+					if version == LEDGER_VERSION
+			)),
+			9 => assert!(matches!(result, Err(crate::ShieldedSpendError::SourceWalletNotFound))),
+			version => panic!("test does not define memo support for ledger {version}"),
+		}
+
+		// The missing-wallet error must not poison the context mutex.
+		assert!(context.try_with_wallet_from_seed(test_seed(), |_| ()).is_none());
+	}
+
+	#[test]
+	fn selecting_from_an_unregistered_source_wallet_returns_a_typed_error() {
+		let context = Arc::new(LedgerContext::<DefaultDB>::new("test"));
+		let result = InputInfo::coins_to_cover_value(
+			context.clone(),
+			test_seed(),
+			1,
+			test_token_type(),
+			CoinSelectionStrategy::LargestFirst,
+		);
+
+		assert!(matches!(result, Err(ShieldedCoinSelectionError::SourceWalletNotFound)));
+		// The selection failure likewise leaves the context usable.
+		assert!(context.try_with_wallet_from_seed(test_seed(), |_| ()).is_none());
+	}
+
+	#[test]
+	fn missing_exact_nullifier_returns_a_distinct_typed_coin_error() {
+		let context =
+			Arc::new(LedgerContext::<DefaultDB>::new_from_wallet_seeds("test", &[test_seed()]));
+		let mut input = make_input(1);
+		input.nullifier = Some(Nullifier(HashOutput([0x24; 32])));
+		input.memo = Some(vec![0x42]);
+		let mut rng = StdRng::from_seed([0u8; 32]);
+		let result: Result<Input<ProofPreimage, DefaultDB>, crate::ShieldedSpendError> =
+			input.build(&mut rng, context);
+
+		match LEDGER_VERSION {
+			7 | 8 => assert!(matches!(
+				result,
+				Err(crate::ShieldedSpendError::MemoUnsupportedLedger { version })
+					if version == LEDGER_VERSION
+			)),
+			9 => assert!(matches!(
+				result,
+				Err(crate::ShieldedSpendError::ShieldedCoinNotFoundByNullifier)
+			)),
+			version => panic!("test does not define memo support for ledger {version}"),
 		}
 	}
 

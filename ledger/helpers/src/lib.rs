@@ -47,6 +47,20 @@ pub struct ContractVerifyingKeyBytes(pub Vec<u8>);
 pub enum ShieldedSpendError {
 	#[error("zswap input memos require ledger 9 or later, but this is ledger {version}")]
 	MemoUnsupportedLedger { version: u32 },
+	/// The memo bytes are outside the 1..=512 the ledger accepts. Returned rather than panicking:
+	/// the size comes from user input (a `--memo` argument, an RPC field), so an out-of-range
+	/// value is an ordinary bad request, not a broken invariant.
+	#[error("invalid memo: {0}")]
+	InvalidMemo(String),
+	/// A direct input request named a nullifier that is not present in the source wallet.
+	#[error("no shielded coin matches the requested nullifier")]
+	ShieldedCoinNotFoundByNullifier,
+	/// A direct input request could not find one coin of the requested token with enough value.
+	#[error("no single shielded coin has at least {minimum_value} units of the requested token")]
+	NoMatchingShieldedCoin { minimum_value: u128 },
+	/// A direct input request names a source wallet that is not registered in the builder context.
+	#[error("source shielded wallet is not registered in the builder context")]
+	SourceWalletNotFound,
 	#[error("{0}")]
 	OfferCreation(String),
 }
@@ -177,6 +191,14 @@ pub mod ledger_7 {
 	///
 	/// Memos arrived with ledger 9; this generation has no field to carry one, so asking for one
 	/// here is refused with a typed error rather than panicking or dropping the message.
+	pub fn validate_shielded_memo(memo: Option<&[u8]>) -> Result<(), crate::ShieldedSpendError> {
+		if memo.is_some() {
+			Err(crate::ShieldedSpendError::MemoUnsupportedLedger { version: LEDGER_VERSION })
+		} else {
+			Ok(())
+		}
+	}
+
 	pub fn shielded_spend<D: ledger_storage::db::DB>(
 		state: &zswap::local::State<D>,
 		rng: &mut rand::rngs::StdRng,
@@ -188,11 +210,7 @@ pub mod ledger_7 {
 		(zswap::local::State<D>, zswap::Input<transient_crypto::proofs::ProofPreimage, D>),
 		crate::ShieldedSpendError,
 	> {
-		if memo.is_some() {
-			return Err(crate::ShieldedSpendError::MemoUnsupportedLedger {
-				version: LEDGER_VERSION,
-			});
-		}
+		validate_shielded_memo(memo.as_deref())?;
 		state
 			.spend(rng, secret_keys, coin, segment)
 			.map_err(|e| crate::ShieldedSpendError::OfferCreation(e.to_string()))
@@ -324,6 +342,14 @@ pub mod ledger_8 {
 	///
 	/// Memos arrived with ledger 9; this generation has no field to carry one, so asking for one
 	/// here is refused with a typed error rather than panicking or dropping the message.
+	pub fn validate_shielded_memo(memo: Option<&[u8]>) -> Result<(), crate::ShieldedSpendError> {
+		if memo.is_some() {
+			Err(crate::ShieldedSpendError::MemoUnsupportedLedger { version: LEDGER_VERSION })
+		} else {
+			Ok(())
+		}
+	}
+
 	pub fn shielded_spend<D: ledger_storage::db::DB>(
 		state: &zswap::local::State<D>,
 		rng: &mut rand::rngs::StdRng,
@@ -335,11 +361,7 @@ pub mod ledger_8 {
 		(zswap::local::State<D>, zswap::Input<transient_crypto::proofs::ProofPreimage, D>),
 		crate::ShieldedSpendError,
 	> {
-		if memo.is_some() {
-			return Err(crate::ShieldedSpendError::MemoUnsupportedLedger {
-				version: LEDGER_VERSION,
-			});
-		}
+		validate_shielded_memo(memo.as_deref())?;
 		state
 			.spend(rng, secret_keys, coin, segment)
 			.map_err(|e| crate::ShieldedSpendError::OfferCreation(e.to_string()))
@@ -511,8 +533,19 @@ pub mod ledger_9 {
 	/// authorizes the spend.
 	///
 	/// The memo is committed to in the spend proof's binding input, so it cannot be altered,
-	/// removed, or moved to another input without invalidating the proof. Sizes are validated by
-	/// the caller.
+	/// removed, or moved to another input without invalidating the proof.
+	///
+	/// An out-of-range memo returns [`crate::ShieldedSpendError::InvalidMemo`] and produces no
+	/// input. Callers are expected to check sizes too, but this boundary does not trust them to:
+	/// the bytes originate in user input, so an out-of-range value has to be a typed error rather
+	/// than a panic in whatever process is building the transaction.
+	pub fn validate_shielded_memo(memo: Option<&[u8]>) -> Result<(), crate::ShieldedSpendError> {
+		memo.map(zswap::Memo::try_from)
+			.transpose()
+			.map(|_| ())
+			.map_err(|e| crate::ShieldedSpendError::InvalidMemo(e.to_string()))
+	}
+
 	pub fn shielded_spend<D: ledger_storage::db::DB>(
 		state: &zswap::local::State<D>,
 		rng: &mut rand::rngs::StdRng,
@@ -525,7 +558,9 @@ pub mod ledger_9 {
 		crate::ShieldedSpendError,
 	> {
 		let memo = memo
-			.map(|bytes| zswap::Memo::new(bytes).expect("memo size should be validated by caller"));
+			.map(zswap::Memo::new)
+			.transpose()
+			.map_err(|e| crate::ShieldedSpendError::InvalidMemo(e.to_string()))?;
 		state
 			.spend_with_memo(rng, secret_keys, coin, segment, memo)
 			.map_err(|e| crate::ShieldedSpendError::OfferCreation(e.to_string()))

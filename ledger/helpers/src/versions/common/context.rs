@@ -494,6 +494,18 @@ impl<D: DB + Clone> LedgerContext<D> {
 		f(wallet)
 	}
 
+	/// Fallibly operate on a single wallet identified by seed.
+	///
+	/// Unlike [`Self::with_wallet_from_seed`], this returns [`None`] for an unregistered seed and
+	/// never panics while holding the wallets mutex for that ordinary request error.
+	pub fn try_with_wallet_from_seed<F, R>(&self, seed: WalletSeed, f: F) -> Option<R>
+	where
+		F: FnOnce(&mut Wallet<D>) -> R,
+	{
+		let mut wallet_guard = self.wallets.lock().expect("Error locking `LedgerContext` wallets");
+		wallet_guard.get_mut(&seed).map(f)
+	}
+
 	/// Operate on two wallets identified by origin and destination seeds.
 	///
 	/// Acquires `self.wallets` exactly once and produces two disjoint
@@ -556,6 +568,13 @@ impl<D: DB + Clone> BuilderContext<D> for LedgerContext<D> {
 		F: FnOnce(&mut Wallet<D>) -> R,
 	{
 		self.with_wallet_from_seed(seed, f)
+	}
+
+	fn try_with_wallet_from_seed<F, R>(&self, seed: WalletSeed, f: F) -> Option<R>
+	where
+		F: FnOnce(&mut Wallet<D>) -> R,
+	{
+		LedgerContext::try_with_wallet_from_seed(self, seed, f)
 	}
 
 	fn with_wallets_from_seeds<F, R>(

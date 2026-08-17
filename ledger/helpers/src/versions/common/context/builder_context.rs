@@ -33,6 +33,20 @@ pub trait BuilderContext<D: DB + Clone>: Send + Sync + 'static {
 	where
 		F: FnOnce(&mut Wallet<D>) -> R;
 
+	/// Operate on a wallet identified by seed, returning [`None`] when the context does not
+	/// contain that wallet.
+	///
+	/// Public transaction-construction paths use this fallible form so an unregistered source is
+	/// an ordinary request error rather than a process panic. Implementations whose legacy
+	/// [`Self::with_wallet_from_seed`] lookup has a registration precondition must override this
+	/// default.
+	fn try_with_wallet_from_seed<F, R>(&self, seed: WalletSeed, f: F) -> Option<R>
+	where
+		F: FnOnce(&mut Wallet<D>) -> R,
+	{
+		Some(self.with_wallet_from_seed(seed, f))
+	}
+
 	/// Operate on two wallets identified by origin and destination seeds.
 	fn with_wallets_from_seeds<F, R>(
 		&self,

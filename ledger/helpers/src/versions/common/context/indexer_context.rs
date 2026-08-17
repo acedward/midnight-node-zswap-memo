@@ -56,6 +56,13 @@ impl<D: DB + Clone> BuilderContext<D> for IndexerContext<D> {
 		todo!("indexer: client-side wallet store, not yet implemented")
 	}
 
+	fn try_with_wallet_from_seed<F, R>(&self, _seed: WalletSeed, _f: F) -> Option<R>
+	where
+		F: FnOnce(&mut Wallet<D>) -> R,
+	{
+		None
+	}
+
 	fn with_wallets_from_seeds<F, R>(
 		&self,
 		_origin_seed: WalletSeed,
