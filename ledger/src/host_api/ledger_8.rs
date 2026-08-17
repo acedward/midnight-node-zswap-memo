@@ -45,6 +45,14 @@ fn is_unified(mut ext: &mut dyn Externalities) -> bool {
 	)
 }
 
+/// Ledger generations before 9 have a single transaction wire version that predates zswap input
+/// memos entirely, so the memo-activation gate can never fire for them. They pass the context
+/// that says exactly that, rather than a default one, which would claim memos are active from
+/// genesis here — true of nothing in these generations.
+#[cfg(feature = "std")]
+const CONSENSUS: crate::common::types::ConsensusContext =
+	crate::common::types::ConsensusContext::MEMO_NEVER_ACTIVE;
+
 #[runtime_interface]
 pub trait Ledger8Bridge {
 	fn set_default_storage(&mut self) {
@@ -118,6 +126,7 @@ pub trait Ledger8Bridge {
 				state_key,
 				tx,
 				block_context,
+				CONSENSUS,
 				true,
 				runtime_version,
 			)
@@ -127,6 +136,7 @@ pub trait Ledger8Bridge {
 				state_key,
 				tx,
 				block_context,
+				CONSENSUS,
 				true,
 				runtime_version,
 			)
@@ -175,6 +185,7 @@ pub trait Ledger8Bridge {
 				state_key,
 				tx,
 				block_context,
+				CONSENSUS,
 				runtime_version,
 				max_weight,
 				false,
@@ -185,6 +196,7 @@ pub trait Ledger8Bridge {
 				state_key,
 				tx,
 				block_context,
+				CONSENSUS,
 				runtime_version,
 				max_weight,
 				false,
@@ -213,6 +225,7 @@ pub trait Ledger8Bridge {
 				state_key,
 				tx,
 				block_context,
+				CONSENSUS,
 				runtime_version,
 			)
 		} else {
@@ -221,6 +234,7 @@ pub trait Ledger8Bridge {
 				state_key,
 				tx,
 				block_context,
+				CONSENSUS,
 				runtime_version,
 			)
 		}
@@ -350,6 +364,7 @@ pub trait Ledger8Bridge {
 				state_key,
 				tx,
 				&block_context,
+				&CONSENSUS,
 				max_weight,
 			)
 		} else {
@@ -357,6 +372,7 @@ pub trait Ledger8Bridge {
 				state_key,
 				tx,
 				&block_context,
+				&CONSENSUS,
 				max_weight,
 			)
 		}

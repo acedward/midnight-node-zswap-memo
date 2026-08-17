@@ -166,6 +166,8 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 				Some(UndeployedNetwork.id()),
 			)
 			.unwrap(),
+			// Undeployed: memo-capable transactions are active from genesis.
+			memo_activation_height: 0,
 		},
 	}
 	.build_storage()

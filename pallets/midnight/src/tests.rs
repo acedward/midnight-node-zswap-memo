@@ -578,6 +578,188 @@ fn test_tblock_correction_does_not_affect_mempool_validation() {
 	});
 }
 
+// ---------------------------------------------------------------------------------------------
+// v12 -> v13 activation (sub-01 phase 5)
+//
+// Two things are under test here, and they are separable. First, *routing*: the host API now
+// decodes through the version-preserving envelope, so a pre-memo `transaction[v12]` reaches
+// validation and application at all — before this phase the strict single-version reader
+// rejected it as undecodable. Second, *activation*: a memo-capable `transaction[v13]` is
+// accepted only in a candidate block at or after the configured height, and is rejected without
+// touching state below it, while the pre-memo encoding is accepted at every height, forever.
+//
+// The fixture is `DEPLOY_TX`, which carries no memo, so it has a valid encoding in both eras and
+// the two can be compared directly. `encode_as_prior_version` produces the v12 one.
+// ---------------------------------------------------------------------------------------------
+
+/// `DEPLOY_TX` in both wire encodings, with the block context it was built for.
+fn deploy_tx_both_encodings() -> (Vec<u8>, Vec<u8>, BlockContext) {
+	let (v13, block_context) =
+		midnight_node_ledger_helpers::ledger_9::extract_tx_with_context(DEPLOY_TX);
+	let v12 = midnight_node_ledger::ledger_9::tx_envelope::encode_as_prior_version(&v13)
+		.expect("the deploy fixture carries no memo, so it has a v12 encoding");
+	(v12, v13, block_context.into())
+}
+
+fn set_activation_height(height: u64) {
+	crate::pallet::MemoActivationHeight::<Test>::put(height);
+}
+
+/// Routing plus equivalence in one assertion: the pre-memo encoding is applied through the host
+/// path, and leaves the ledger in exactly the state the memo-capable encoding of the same
+/// transaction leaves it in. Same events, same state root — the encoding is not observable in
+/// consensus state, which is the property that lets the two coexist indefinitely (spec FR-011).
+#[test]
+fn v12_and_v13_encodings_apply_to_the_same_state() {
+	let (v12, v13, block_context) = deploy_tx_both_encodings();
+
+	let roots_and_events = |tx: Vec<u8>| {
+		mock::new_test_ext().execute_with(|| {
+			init_ledger_state(block_context.clone());
+			assert_ok!(send_mn_transaction(tx));
+			let events = mock::midnight_events();
+			assert_matches!(events[0], Event::ContractDeploy(_));
+			assert_matches!(events[1], Event::TxApplied(_));
+			(
+				mock::Midnight::get_ledger_state_root().expect("state root"),
+				mock::Midnight::get_zswap_state_root().expect("zswap root"),
+				events.len(),
+			)
+		})
+	};
+
+	assert_eq!(
+		roots_and_events(v12),
+		roots_and_events(v13),
+		"the two encodings of one transaction must leave identical state",
+	);
+}
+
+/// Below activation, a memo-capable transaction fails admission with the structured
+/// not-yet-active error and mutates nothing (spec FR-009). `u64::MAX` is the "never, on this
+/// configuration" end of the range; the boundary cases are the two tests after this one.
+#[test]
+fn v13_is_rejected_and_mutates_nothing_before_activation() {
+	let (_v12, v13, block_context) = deploy_tx_both_encodings();
+
+	mock::new_test_ext().execute_with(|| {
+		init_ledger_state(block_context);
+		set_activation_height(u64::MAX);
+
+		let ledger_root_before = mock::Midnight::get_ledger_state_root().expect("state root");
+		let zswap_root_before = mock::Midnight::get_zswap_state_root().expect("zswap root");
+
+		let error: sp_runtime::DispatchError = Error::<Test>::TransactionVersionNotActive.into();
+		assert_err!(send_mn_transaction(v13), error);
+
+		assert!(mock::midnight_events().is_empty(), "a rejected transaction emits no events");
+		assert_eq!(
+			mock::Midnight::get_ledger_state_root().expect("state root"),
+			ledger_root_before,
+			"rejection before activation must not mutate the ledger state",
+		);
+		assert_eq!(
+			mock::Midnight::get_zswap_state_root().expect("zswap root"),
+			zswap_root_before,
+			"rejection before activation must not mutate the zswap state",
+		);
+	});
+}
+
+/// The pre-memo encoding is unaffected by the activation height: it is accepted at any height,
+/// including one at which the memo-capable encoding is still rejected (spec FR-011).
+#[test]
+fn v12_is_accepted_before_activation() {
+	let (v12, _v13, block_context) = deploy_tx_both_encodings();
+
+	mock::new_test_ext().execute_with(|| {
+		init_ledger_state(block_context);
+		set_activation_height(u64::MAX);
+
+		assert_ok!(send_mn_transaction(v12));
+		assert_matches!(mock::midnight_events()[1], Event::TxApplied(_));
+	});
+}
+
+/// The exact boundary. `init_ledger_state` puts the candidate block at height 1, so activation at
+/// 1 accepts and activation at 2 — the very next block — rejects. Together with the test above,
+/// this pins the comparison as `candidate_height >= activation_height`, not `>`.
+#[test]
+fn v13_activates_at_exactly_the_configured_height() {
+	let (_v12, v13, block_context) = deploy_tx_both_encodings();
+	const CANDIDATE_HEIGHT: u64 = 1;
+
+	mock::new_test_ext().execute_with(|| {
+		init_ledger_state(block_context.clone());
+		assert_eq!(mock::System::block_number(), CANDIDATE_HEIGHT);
+		set_activation_height(CANDIDATE_HEIGHT);
+
+		assert_ok!(send_mn_transaction(v13.clone()));
+	});
+
+	mock::new_test_ext().execute_with(|| {
+		init_ledger_state(block_context);
+		set_activation_height(CANDIDATE_HEIGHT + 1);
+
+		let error: sp_runtime::DispatchError = Error::<Test>::TransactionVersionNotActive.into();
+		assert_err!(send_mn_transaction(v13), error);
+	});
+}
+
+/// The default is activation at genesis, which is what every network this repository ships a
+/// chain spec for uses — so nothing about today's behaviour changes, and the rest of this file
+/// (which never sets a height) keeps passing for the right reason rather than by accident.
+#[test]
+fn the_default_activation_height_is_genesis() {
+	mock::new_test_ext().execute_with(|| {
+		assert_eq!(crate::pallet::MemoActivationHeight::<Test>::get(), 0);
+		assert!(
+			mock::Midnight::consensus_context().memo_active(),
+			"with activation at 0 the memo-capable encoding is active from the first block",
+		);
+	});
+}
+
+/// Pool admission applies the same rule against the same candidate context, and reports it as the
+/// structured not-yet-active code rather than a generic failure — the submitter is meant to be
+/// able to tell "resubmit after activation" from "this transaction is broken" (spec FR-012).
+/// There is no staging: the transaction is simply not admitted.
+#[test]
+fn the_pool_rejects_v13_before_activation_and_admits_v12() {
+	let (v12, v13, block_context) = deploy_tx_both_encodings();
+
+	mock::new_test_ext().execute_with(|| {
+		init_ledger_state(block_context);
+		set_activation_height(u64::MAX);
+
+		let call = MidnightCall::send_mn_transaction { midnight_tx: v13 };
+		assert_err!(
+			<mock::Midnight as ValidateUnsigned>::validate_unsigned(
+				TransactionSource::External,
+				&call
+			),
+			TransactionValidityError::Invalid(InvalidTransaction::Custom(
+				LedgerApiError::TransactionVersionNotActive.into()
+			))
+		);
+
+		// `pre_dispatch` is the block-production side of the same rule: a transaction the pool
+		// refuses must not be includable either (spec FR-013).
+		assert_err!(
+			<mock::Midnight as ValidateUnsigned>::pre_dispatch(&call),
+			TransactionValidityError::Invalid(InvalidTransaction::Custom(
+				LedgerApiError::TransactionVersionNotActive.into()
+			))
+		);
+
+		let v12_call = MidnightCall::send_mn_transaction { midnight_tx: v12 };
+		assert_ok!(<mock::Midnight as ValidateUnsigned>::validate_unsigned(
+			TransactionSource::External,
+			&v12_call
+		));
+	});
+}
+
 #[cfg(feature = "experimental")]
 #[ignore = "TODO UNSHIELDED - fix when Claim Mint is properly handled for Unshielded"]
 #[test]

@@ -52,7 +52,8 @@ pub mod pallet {
 	use sidechain_domain::byte_string::BoundedString;
 
 	use midnight_node_ledger::types::{
-		self as LedgerTypes, GasCost, Tx as LedgerTx, UtxoInfo, active_ledger_bridge as LedgerApi,
+		self as LedgerTypes, ConsensusContext, GasCost, Tx as LedgerTx, UtxoInfo,
+		active_ledger_bridge as LedgerApi,
 		active_version::{
 			BlockContext, DeserializationError, LedgerApiError, SerializationError,
 			TransactionError,
@@ -77,6 +78,25 @@ pub mod pallet {
 			StateKey::<T>::put(new_state_key);
 
 			Ok(custom_result)
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
+		/// The consensus data that decides which transaction wire versions this candidate block
+		/// may contain.
+		///
+		/// `block_number()` is the *candidate* height on every path this is used from. During
+		/// block execution frame_system has already initialized it to the block being built or
+		/// imported; on the pool path `Executive::validate_transaction` initializes it to
+		/// `parent + 1` against the parent the pool is validating at. So the answer is a function
+		/// of the branch the transaction is being considered on, never of local time, startup
+		/// order, or an abandoned best chain (spec FR-007/FR-010) — and a reorganization
+		/// re-evaluates it because the replacement branch supplies a different parent.
+		pub fn consensus_context() -> ConsensusContext {
+			ConsensusContext {
+				block_height: <frame_system::Pallet<T>>::block_number().unique_saturated_into(),
+				memo_activation_height: MemoActivationHeight::<T>::get(),
+			}
 		}
 	}
 
@@ -116,6 +136,14 @@ pub mod pallet {
 	pub struct GenesisConfig<T: Config> {
 		pub network_id: String,
 		pub genesis_state_key: Vec<u8>,
+		/// First block height at which memo-capable transactions are accepted. Defaults to `0`
+		/// — active from genesis — which is the deployed value for dev, undeployed and test
+		/// networks, and is what makes a fresh chain behave exactly as it does today. A real
+		/// network upgrading an existing chain must instead set a *future* height with at least
+		/// the finality lag of margin, so a reorganization cannot cross an unfinalized
+		/// activation (spec FR-008).
+		#[serde(default)]
+		pub memo_activation_height: u64,
 		#[serde(skip)]
 		pub _config: PhantomData<T>,
 	}
@@ -124,6 +152,7 @@ pub mod pallet {
 	impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
 		fn build(&self) {
 			Pallet::<T>::initialize_state(&self.network_id, &self.genesis_state_key);
+			MemoActivationHeight::<T>::put(self.memo_activation_height);
 		}
 	}
 
@@ -169,6 +198,23 @@ pub mod pallet {
 
 	#[pallet::storage]
 	pub type NetworkId<T> = StorageValue<_, BoundedString<MaxNetworkIdLength>, ValueQuery>;
+
+	#[pallet::type_value]
+	pub fn DefaultMemoActivationHeight() -> u64 {
+		0
+	}
+
+	/// The block height from which memo-capable transactions are accepted.
+	///
+	/// Chain state, seeded from the chain specification at genesis, is the smallest carrier that
+	/// is genuinely consensus-authoritative *and* per-network: it is part of the state each
+	/// branch carries, so a candidate block's activation is read from its own parent and a
+	/// reorganization re-evaluates it without any extra machinery (spec FR-007/FR-010). A node
+	/// CLI flag or config file would be an uncoordinated local setting, and a runtime constant
+	/// would force a separate runtime build per network.
+	#[pallet::storage]
+	pub type MemoActivationHeight<T> =
+		StorageValue<_, u64, ValueQuery, DefaultMemoActivationHeight>;
 
 	#[pallet::type_value]
 	pub fn DefaultWeight() -> Weight {
@@ -293,6 +339,8 @@ pub mod pallet {
 		ContractNotPresent,
 		#[codec(index = 14)]
 		BeneficiaryNotFound,
+		#[codec(index = 15)]
+		TransactionVersionNotActive,
 	}
 	// grcov-excl-stop
 
@@ -316,6 +364,9 @@ pub mod pallet {
 				},
 				LedgerApiError::ContractNotPresent => Error::<T>::ContractNotPresent,
 				LedgerApiError::BeneficiaryNotFound => Error::<T>::BeneficiaryNotFound,
+				LedgerApiError::TransactionVersionNotActive => {
+					Error::<T>::TransactionVersionNotActive
+				},
 			}
 		}
 	}
@@ -382,6 +433,7 @@ pub mod pallet {
 				&state_key,
 				&midnight_tx,
 				block_context,
+				Self::consensus_context(),
 				runtime_version,
 			)
 			.map_err(Error::<T>::from)?;
@@ -483,6 +535,7 @@ pub mod pallet {
 				&state_key,
 				midnight_tx,
 				block_context,
+				Self::consensus_context(),
 				runtime_version,
 			)
 			.map_err(|e| Self::invalid_transaction(e.into()))?;
@@ -580,6 +633,7 @@ pub mod pallet {
 					&state_key,
 					midnight_tx,
 					block_context,
+					Self::consensus_context(),
 					runtime_version,
 					max_weight,
 				)
@@ -616,7 +670,13 @@ pub mod pallet {
 			let state_key = StateKey::<T>::get();
 			let block_context = Self::get_block_context();
 			let max_weight = T::BlockWeights::get().max_block.ref_time();
-			LedgerApi::get_transaction_cost(&state_key, tx, block_context, max_weight)
+			LedgerApi::get_transaction_cost(
+				&state_key,
+				tx,
+				block_context,
+				Self::consensus_context(),
+				max_weight,
+			)
 		}
 
 		pub fn get_zswap_state_root() -> Result<Vec<u8>, LedgerApiError> {

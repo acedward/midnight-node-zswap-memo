@@ -257,6 +257,12 @@ pub enum LedgerApiError {
 	GetTransactionContextError,
 	ContractNotPresent,
 	BeneficiaryNotFound,
+	/// A memo-capable (`transaction[v13]`) transaction was presented for a candidate block below
+	/// the chain's configured memo activation height. Fieldless on purpose: the two heights are
+	/// logged, but adding them to the enum would put 16 bytes of payload behind this variant and
+	/// silently drop it out of the exhaustive `all_ledger_api_errors` enumeration below, which is
+	/// what guards the `u8` codes from colliding.
+	TransactionVersionNotActive,
 }
 
 impl core::fmt::Display for LedgerApiError {
@@ -350,6 +356,12 @@ impl core::fmt::Display for LedgerApiError {
 			},
 			LedgerApiError::BeneficiaryNotFound => {
 				write!(f, "Error, beneficiary is not found")
+			},
+			LedgerApiError::TransactionVersionNotActive => {
+				write!(
+					f,
+					"Error, this transaction's wire version is not yet active at this block height"
+				)
 			},
 		}
 	}
@@ -547,6 +559,7 @@ impl From<LedgerApiError> for u8 {
 			LedgerApiError::ContractNotPresent => 156,
 			LedgerApiError::BeneficiaryNotFound => 157,
 			LedgerApiError::GetTransactionContextError => 165,
+			LedgerApiError::TransactionVersionNotActive => 158,
 			// Error in the Host API, not coming from Ledger
 			LedgerApiError::HostApiError => 255,
 		}

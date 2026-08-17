@@ -21,7 +21,8 @@
 //! transaction can never silently acquire a v13 header.
 
 use ledger_storage_ledger_8::DefaultDB;
-use midnight_node_res::undeployed::transactions::RAW_TX_V12;
+use midnight_node_ledger::ledger_9::tx_envelope::encode_as_prior_version;
+use midnight_node_res::undeployed::transactions::{DEPLOY_TX, RAW_TX_V12};
 use mn_ledger_9::prior_versions::{VersionedTransaction, versioned_deserialize};
 use mn_ledger_9::structure::{ProofMarker, Signature};
 use transient_crypto_ledger_9::commitment::PureGeneratorPedersen;
@@ -108,4 +109,41 @@ fn v13_header_with_v12_body_is_rejected() {
 fn truncated_v12_bytes_are_rejected() {
 	let cut = &RAW_TX_V12[..RAW_TX_V12.len() - 7];
 	assert!(decode(cut).is_err());
+}
+
+/// One transaction, two encodings, one meaning.
+///
+/// `DEPLOY_TX` is a memo-less fixture that is valid against the undeployed genesis state, so it
+/// can be written in either era. Re-encoding it as `transaction[v12]` and decoding that back
+/// through the envelope must yield a transaction with the same identity as the v13 original —
+/// which is what makes the node-side claim testable at all: whichever encoding arrives, the
+/// ledger sees the same transaction. `pallet-midnight`'s `v12_and_v13_encodings_*` tests then
+/// take these same two byte strings all the way through apply and compare state roots.
+#[test]
+fn the_two_encodings_of_one_transaction_decode_to_the_same_transaction() {
+	let (v13_bytes, _block_context) =
+		midnight_node_ledger_helpers::ledger_9::extract_tx_with_context(DEPLOY_TX);
+	let v12_bytes = encode_as_prior_version(&v13_bytes).expect("the fixture carries no memo");
+
+	assert!(v12_bytes.starts_with(b"midnight:transaction[v12]"));
+	assert_ne!(v12_bytes, v13_bytes, "the eras have distinct encodings by design");
+
+	let as_v12 = decode(&v12_bytes).expect("the re-encoding must decode");
+	let as_v13 = decode(&v13_bytes).expect("the fixture must decode");
+	assert!(as_v12.is_v12());
+	assert!(!as_v13.is_v12());
+
+	assert_eq!(
+		as_v12.to_latest().transaction_hash(),
+		as_v13.to_latest().transaction_hash(),
+		"the same transaction in either encoding must have one identity",
+	);
+
+	// And the v12 form still round-trips byte-identically, so nothing about being *derived* from
+	// a v13 value makes it a second-class citizen at the boundary.
+	let mut reserialized = Vec::new();
+	as_v12
+		.serialize_source(&mut reserialized)
+		.expect("reserialization should succeed");
+	assert_eq!(reserialized, v12_bytes);
 }

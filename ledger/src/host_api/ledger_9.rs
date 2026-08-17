@@ -2,7 +2,8 @@
 use crate::ledger_9::Bridge;
 use crate::{
 	common::types::{
-		GasCost, Hash, SystemTransactionAppliedStateRoot, TransactionAppliedStateRoot, Tx,
+		ConsensusContext, GasCost, Hash, SystemTransactionAppliedStateRoot,
+		TransactionAppliedStateRoot, Tx,
 	},
 	ledger_9::{BlockContext, types::LedgerApiError},
 };
@@ -150,6 +151,16 @@ pub trait Ledger9Bridge {
 
 	/*
 	 * apply_transaction()
+	 *
+	 * Version 1 is what runtimes built before the memo upgrade call, including every runtime
+	 * already on chain — so it is the entry point a replaying node executes historical blocks
+	 * through. It decodes both wire eras (that is the whole point: a ledger-9 chain's history is
+	 * written in `transaction[v12]`, which the current strict reader no longer accepts) but
+	 * treats memos as never active, which is the truth for such a runtime: the upgrade has not
+	 * happened on it. Historical blocks therefore reach exactly the verdicts they always did, and
+	 * a memo-capable transaction cannot slip into a chain whose runtime predates the feature.
+	 *
+	 * Version 2 carries the consensus context, and is what the upgraded runtime calls.
 	 */
 	fn apply_transaction(
 		&mut self,
@@ -164,6 +175,7 @@ pub trait Ledger9Bridge {
 				state_key,
 				tx,
 				block_context,
+				ConsensusContext::MEMO_NEVER_ACTIVE,
 				true,
 				runtime_version,
 			)
@@ -173,6 +185,39 @@ pub trait Ledger9Bridge {
 				state_key,
 				tx,
 				block_context,
+				ConsensusContext::MEMO_NEVER_ACTIVE,
+				true,
+				runtime_version,
+			)
+		}
+	}
+
+	#[version(2)]
+	fn apply_transaction(
+		&mut self,
+		state_key: PassFatPointerAndRead<&[u8]>,
+		tx: PassFatPointerAndRead<&[u8]>,
+		block_context: PassFatPointerAndDecode<BlockContext>,
+		consensus: PassFatPointerAndDecode<ConsensusContext>,
+		runtime_version: u32,
+	) -> AllocateAndReturnByCodec<Result<TransactionAppliedStateRoot, LedgerApiError>> {
+		if is_unified(*self) {
+			Bridge::<Signature, DbUnified>::apply_transaction(
+				*self,
+				state_key,
+				tx,
+				block_context,
+				consensus,
+				true,
+				runtime_version,
+			)
+		} else {
+			Bridge::<Signature, DbSeparate>::apply_transaction(
+				*self,
+				state_key,
+				tx,
+				block_context,
+				consensus,
 				true,
 				runtime_version,
 			)
@@ -205,6 +250,8 @@ pub trait Ledger9Bridge {
 
 	/*
 	 * validate_transaction()
+	 *
+	 * See `apply_transaction` for why version 1 treats memos as never active.
 	 */
 	fn validate_transaction(
 		&mut self,
@@ -221,6 +268,7 @@ pub trait Ledger9Bridge {
 				state_key,
 				tx,
 				block_context,
+				ConsensusContext::MEMO_NEVER_ACTIVE,
 				runtime_version,
 				max_weight,
 				false,
@@ -231,6 +279,45 @@ pub trait Ledger9Bridge {
 				state_key,
 				tx,
 				block_context,
+				ConsensusContext::MEMO_NEVER_ACTIVE,
+				runtime_version,
+				max_weight,
+				false,
+			)?
+		};
+
+		Ok(hash)
+	}
+
+	#[version(2)]
+	fn validate_transaction(
+		&mut self,
+		state_key: PassFatPointerAndRead<&[u8]>,
+		tx: PassFatPointerAndRead<&[u8]>,
+		block_context: PassFatPointerAndDecode<BlockContext>,
+		consensus: PassFatPointerAndDecode<ConsensusContext>,
+		runtime_version: u32,
+		// The Runtime's max weight as of now
+		max_weight: u64,
+	) -> AllocateAndReturnByCodec<Result<Hash, LedgerApiError>> {
+		let (hash, _) = if is_unified(*self) {
+			Bridge::<Signature, DbUnified>::validate_transaction(
+				*self,
+				state_key,
+				tx,
+				block_context,
+				consensus,
+				runtime_version,
+				max_weight,
+				false,
+			)?
+		} else {
+			Bridge::<Signature, DbSeparate>::validate_transaction(
+				*self,
+				state_key,
+				tx,
+				block_context,
+				consensus,
 				runtime_version,
 				max_weight,
 				false,
@@ -259,6 +346,7 @@ pub trait Ledger9Bridge {
 				state_key,
 				tx,
 				block_context,
+				ConsensusContext::MEMO_NEVER_ACTIVE,
 				runtime_version,
 			)
 		} else {
@@ -267,6 +355,37 @@ pub trait Ledger9Bridge {
 				state_key,
 				tx,
 				block_context,
+				ConsensusContext::MEMO_NEVER_ACTIVE,
+				runtime_version,
+			)
+		}
+	}
+
+	#[version(2)]
+	fn validate_guaranteed_execution(
+		&mut self,
+		state_key: PassFatPointerAndRead<&[u8]>,
+		tx: PassFatPointerAndRead<&[u8]>,
+		block_context: PassFatPointerAndDecode<BlockContext>,
+		consensus: PassFatPointerAndDecode<ConsensusContext>,
+		runtime_version: u32,
+	) -> AllocateAndReturnByCodec<Result<(), LedgerApiError>> {
+		if is_unified(*self) {
+			Bridge::<Signature, DbUnified>::validate_guaranteed_execution(
+				*self,
+				state_key,
+				tx,
+				block_context,
+				consensus,
+				runtime_version,
+			)
+		} else {
+			Bridge::<Signature, DbSeparate>::validate_guaranteed_execution(
+				*self,
+				state_key,
+				tx,
+				block_context,
+				consensus,
 				runtime_version,
 			)
 		}
@@ -432,6 +551,7 @@ pub trait Ledger9Bridge {
 				state_key,
 				tx,
 				&block_context,
+				&ConsensusContext::MEMO_NEVER_ACTIVE,
 				max_weight,
 			)
 		} else {
@@ -439,6 +559,35 @@ pub trait Ledger9Bridge {
 				state_key,
 				tx,
 				&block_context,
+				&ConsensusContext::MEMO_NEVER_ACTIVE,
+				max_weight,
+			)
+		}
+	}
+
+	#[version(2)]
+	fn get_transaction_cost(
+		&mut self,
+		state_key: PassFatPointerAndRead<&[u8]>,
+		tx: PassFatPointerAndRead<&[u8]>,
+		block_context: PassFatPointerAndDecode<BlockContext>,
+		consensus: PassFatPointerAndDecode<ConsensusContext>,
+		max_weight: u64,
+	) -> AllocateAndReturnByCodec<Result<GasCost, LedgerApiError>> {
+		if is_unified(*self) {
+			Bridge::<Signature, DbUnified>::get_transaction_cost(
+				state_key,
+				tx,
+				&block_context,
+				&consensus,
+				max_weight,
+			)
+		} else {
+			Bridge::<Signature, DbSeparate>::get_transaction_cost(
+				state_key,
+				tx,
+				&block_context,
+				&consensus,
 				max_weight,
 			)
 		}

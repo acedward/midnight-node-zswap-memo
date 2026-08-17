@@ -56,6 +56,9 @@ pub mod ledger_7 {
 	#[path = "guaranteed_validation/ledger_7.rs"]
 	mod guaranteed_validation;
 
+	#[path = "tx_envelope/pre_ledger_9.rs"]
+	mod tx_envelope;
+
 	#[path = "post_block_update/ledger_7.rs"]
 	mod post_block_update;
 
@@ -91,6 +94,10 @@ pub mod ledger_8 {
 
 	#[path = "guaranteed_validation/ledger_8.rs"]
 	mod guaranteed_validation;
+
+	#[allow(clippy::duplicate_mod)]
+	#[path = "tx_envelope/pre_ledger_9.rs"]
+	mod tx_envelope;
 
 	#[path = "post_block_update/ledger_8.rs"]
 	mod post_block_update;
@@ -128,6 +135,9 @@ pub mod ledger_9 {
 
 	#[path = "guaranteed_validation/ledger_9.rs"]
 	mod guaranteed_validation;
+
+	#[path = "tx_envelope/ledger_9.rs"]
+	pub mod tx_envelope;
 
 	#[path = "post_block_update/ledger_9.rs"]
 	mod post_block_update;
