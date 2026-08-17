@@ -493,11 +493,12 @@ mod tests {
 		assert_eq!(ledger.get_unclaimed_amount(bridge_addr), None);
 	}
 
-	/// v12→v13 transition, phase 1: a genuine pre-memo `transaction[v12]` specimen must fail
-	/// today's reader *cleanly* — a structured deserialization error, never a panic — because
-	/// a live node meets old bytes long before any decoder work lands. This shared test file
-	/// compiles into every ledger generation; the clean-failure property must hold in all of
-	/// them (v12 is foreign to ledger 7/8 too), so this one is deliberately unguarded.
+	/// A genuine pre-memo `transaction[v12]` specimen must fail the *strict* single-version
+	/// reader cleanly — a structured deserialization error, never a panic. This is permanent
+	/// policy, not a stopgap: historical decoding goes through the version-preserving envelope
+	/// (`prior_versions::versioned_deserialize`, exercised in `tests/v12_transition.rs`), and
+	/// the strict path stays `[v13]`-only so a v12 value can never silently acquire a v13
+	/// header. Unguarded because the clean-failure property must hold in every generation.
 	#[test]
 	fn v12_transaction_is_rejected_cleanly_by_the_v13_reader() {
 		use super::super::LedgerApiError;
@@ -509,28 +510,6 @@ mod tests {
 			.tagged_deserialize::<Transaction<Signature, DefaultDB>>(RAW_TX_V12)
 			.expect_err("a v12 transaction must not decode under v13-only rules yet");
 		assert!(matches!(err, LedgerApiError::Deserialization(_)), "got {err:?}");
-	}
-
-	/// v12→v13 transition red bar: flips green when prior-version decoding lands. Ignored so
-	/// the suite stays green meanwhile; run with `cargo test -- --ignored` to see the current
-	/// state of the transition work. When it passes, also assert the decoded transaction
-	/// re-serializes byte-identically (no silent canonicalization into v13).
-	///
-	/// Ledger 9 only: the decoder belongs to the generation that superseded v12. For ledger
-	/// 7/8 this test vacuously passes — a v12 transaction is simply foreign there, which the
-	/// unguarded clean-rejection test above already covers.
-	#[test]
-	#[ignore = "v12->v13 transition: prior-version decoding not implemented yet"]
-	fn v12_transaction_deserializes_once_prior_version_decoding_lands() {
-		use super::super::transaction::Transaction;
-		use midnight_node_res::undeployed::transactions::RAW_TX_V12;
-
-		if CRATE_NAME != "mn-ledger-9" {
-			return;
-		}
-		let api = Api::new();
-		api.tagged_deserialize::<Transaction<Signature, DefaultDB>>(RAW_TX_V12)
-			.expect("transition goal: a v12 transaction decodes, memo-less, under the new rules");
 	}
 }
 // grcov-excl-stop

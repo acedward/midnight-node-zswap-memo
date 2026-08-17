@@ -7851,7 +7851,7 @@ dependencies = [
 [[package]]
 name = "midnight-ledger-v9"
 version = "1.0.0"
-source = "git+https://github.com/acedward/midnight-ledger-zswap-memo?rev=a59b076ce9ece422553fc153b8aa980879aac744#a59b076ce9ece422553fc153b8aa980879aac744"
+source = "git+https://github.com/acedward/midnight-ledger-zswap-memo?rev=5eee0e914a13e09bc04a32f77e8f4a1e2740506b#5eee0e914a13e09bc04a32f77e8f4a1e2740506b"
 dependencies = [
  "anyhow",
  "derive-where",
@@ -8995,7 +8995,7 @@ dependencies = [
 [[package]]
 name = "midnight-zswap"
 version = "9.0.0"
-source = "git+https://github.com/acedward/midnight-ledger-zswap-memo?rev=a59b076ce9ece422553fc153b8aa980879aac744#a59b076ce9ece422553fc153b8aa980879aac744"
+source = "git+https://github.com/acedward/midnight-ledger-zswap-memo?rev=5eee0e914a13e09bc04a32f77e8f4a1e2740506b#5eee0e914a13e09bc04a32f77e8f4a1e2740506b"
 dependencies = [
  "anyhow",
  "derive-where",

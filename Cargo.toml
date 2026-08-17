@@ -473,8 +473,8 @@ parity-db = { git = "https://github.com/midnightntwrk/parity-db.git", branch = "
 # Do NOT also patch `midnight-storage` or `midnight-storage-core` to that source: the published
 # 1.2.0 storage-core differs from the same-versioned source there, and forcing it breaks the
 # ledger-7 `midnight-storage 1.1.1` that still resolves from crates.io.
-midnight-ledger-v9            = { git = "https://github.com/acedward/midnight-ledger-zswap-memo", rev = "a59b076ce9ece422553fc153b8aa980879aac744" }
-midnight-zswap                = { git = "https://github.com/acedward/midnight-ledger-zswap-memo", rev = "a59b076ce9ece422553fc153b8aa980879aac744" }
+midnight-ledger-v9            = { git = "https://github.com/acedward/midnight-ledger-zswap-memo", rev = "5eee0e914a13e09bc04a32f77e8f4a1e2740506b" }
+midnight-zswap                = { git = "https://github.com/acedward/midnight-ledger-zswap-memo", rev = "5eee0e914a13e09bc04a32f77e8f4a1e2740506b" }
 midnight-coin-structure       = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "coin-structure-3.0.0-rc.1" }
 midnight-base-crypto          = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "base-crypto-1.1.0-rc.2" }
 midnight-base-crypto-derive   = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "base-crypto-derive-1.1.0-rc.2" }
