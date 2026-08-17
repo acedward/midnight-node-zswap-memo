@@ -332,3 +332,44 @@ pub struct UtxoInfo {
 	pub value: u128,
 	pub output_no: u32,
 }
+
+#[cfg(test)]
+mod tests {
+	use super::ConsensusContext;
+
+	fn at(block_height: u64, memo_activation_height: u64) -> ConsensusContext {
+		ConsensusContext { block_height, memo_activation_height }
+	}
+
+	/// The boundary is inclusive: a candidate block *at* the activation height already accepts
+	/// the memo-capable encoding. `pallet-midnight`'s
+	/// `v13_activates_at_exactly_the_configured_height` pins the same rule end to end.
+	#[test]
+	fn activation_is_inclusive_of_its_own_height() {
+		assert!(!at(41, 42).memo_active());
+		assert!(at(42, 42).memo_active());
+		assert!(at(43, 42).memo_active());
+	}
+
+	/// Zero is the deployed value for dev, undeployed and test networks, and means active from
+	/// the first block — which is what keeps a fresh chain behaving exactly as it does today.
+	#[test]
+	fn zero_activates_at_genesis() {
+		assert!(at(0, 0).memo_active());
+		assert!(ConsensusContext::default().memo_active());
+	}
+
+	/// `MEMO_NEVER_ACTIVE` is what the *original* version of each ledger-9 transaction host
+	/// function passes, and historical runtimes are the ones that call it. Correct replay of a
+	/// pre-memo chain depends on this constant closing the gate at every height a block can
+	/// have — if it ever answered `true`, an already-deployed runtime would start accepting
+	/// transactions its own consensus rules never authorized.
+	#[test]
+	fn memo_never_active_closes_the_gate_at_every_height() {
+		for height in [0, 1, 1_000_000, u64::MAX - 1] {
+			let ctx =
+				ConsensusContext { block_height: height, ..ConsensusContext::MEMO_NEVER_ACTIVE };
+			assert!(!ctx.memo_active(), "memos must stay inactive at height {height}");
+		}
+	}
+}
