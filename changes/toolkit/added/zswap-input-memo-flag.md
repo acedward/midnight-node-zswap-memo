@@ -1,6 +1,14 @@
 #toolkit #zswap
 # Add `--memo` to `generate-txs single-tx`
 
+> ⚠️ **BREAKING CHANGE — coordinated upgrade required. Partial deployment is not supported.**
+> A memo-bearing transaction is `transaction[v13]`, which only a node running the memo build can
+> decode, and which that node accepts only at or after the chain's configured
+> `MemoActivationHeight` (default `0`, so dev/undeployed chains are unaffected). Submitting one
+> earlier is refused by both the pool and block validation with
+> `TransactionVersionNotActive` (ledger error code 158, pallet error index 15). Runtime
+> `spec_version` moves `002_001_000 → 002_002_000`; see the node change file for the full notice.
+
 `generate-txs single-tx` now accepts `--memo <hex>`, attaching an authenticated message to the
 shielded spend. The memo is committed to in the spend proof, so it is authorized by the same
 secret that authorizes the spend and cannot be altered or removed in transit.
@@ -31,6 +39,11 @@ single-wallet lookup, while `ShieldedSpendError` and `ShieldedCoinSelectionError
 the ledger API, and inspection only labels a memo authenticated after full validation and the
 carrying segment's successful application. These are source- and validity-visible breaking changes
 and require the coordinated release warning recorded in the project plan.
+
+The block fetcher recognizes runtime `spec_version` `002_002_000` as 2.2.0 and decodes those
+blocks with the 2.1.0 metadata, whose extrinsic envelope this release leaves unchanged. Memo-less
+transactions may still be presented in the pre-memo `transaction[v12]` encoding indefinitely; the
+toolkit emits the current encoding.
 
 Scope: part of the fresh-chain dev/undeployed-network prototype described in the node change
 file. Requires ledger 9 or later, and offers no wallet or SDK surface.

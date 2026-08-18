@@ -27,6 +27,7 @@ pub enum RuntimeVersion {
 	V1_0_0,
 	V2_0_0,
 	V2_1_0,
+	V2_2_0,
 }
 impl TryFrom<u32> for RuntimeVersion {
 	type Error = RuntimeVersionError;
@@ -37,6 +38,7 @@ impl TryFrom<u32> for RuntimeVersion {
 			001_000_000 => Ok(Self::V1_0_0),
 			002_000_000 => Ok(Self::V2_0_0),
 			002_001_000 => Ok(Self::V2_1_0),
+			002_002_000 => Ok(Self::V2_2_0),
 			_ => Err(RuntimeVersionError::UnsupportedBlockVersion(value)),
 		}
 	}
@@ -51,6 +53,7 @@ impl RuntimeVersion {
 			Self::V1_0_0 => 001_000_000,
 			Self::V2_0_0 => 002_000_000,
 			Self::V2_1_0 => 002_001_000,
+			Self::V2_2_0 => 002_002_000,
 		}
 	}
 
@@ -164,5 +167,18 @@ impl_midnight_metadata!(
 impl_midnight_metadata!(
 	MidnightMetadata2_1_0,
 	mn_meta_2_1_0,
+	midnight_node_metadata::midnight_metadata_2_1_0
+);
+
+// The ZSwap-input-memo runtime (spec 2_002_000) adds a pallet-midnight storage
+// item, a genesis field and an error variant, but leaves the extrinsic envelope
+// (send_mn_transaction / send_mn_system_transaction / timestamp.set) untouched,
+// so the 2.1.0 subxt metadata decodes its blocks unchanged — the same reason
+// 2.0.0 reuses the shape 1.0.0 established. Only the inner ledger transaction
+// bytes gained a version, and those are dispatched separately through the
+// v12/v13 envelope, not through this metadata.
+impl_midnight_metadata!(
+	MidnightMetadata2_2_0,
+	mn_meta_2_2_0,
 	midnight_node_metadata::midnight_metadata_2_1_0
 );
