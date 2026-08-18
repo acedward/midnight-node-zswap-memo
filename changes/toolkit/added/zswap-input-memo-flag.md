@@ -26,7 +26,10 @@ yields no input. Direct construction and coin selection also return a typed erro
 wallet is not registered in the builder context, rather than panicking while holding the context
 mutex. Unit tests cover the generation-dispatch and selector details;
 `scripts/tests/memo-e2e.sh` covers the user-facing invalid encodings, unshielded-only and
-no-destination shapes, and a funded-wallet no-selection request against a live dev node. It also
+no-destination shapes, and a funded-wallet no-selection request against a live dev node. Each of
+those refusals is proved four ways — the typed error, no panic, nothing submitted to the node, no
+transaction file written, and an unchanged shielded coin set — so a "rejected" case cannot quietly
+have produced or sent something. It also
 decodes the generated transaction to assert the memo is attached to exactly one input before
 submitting—finalization alone would not prove that, since a silently dropped memo still yields a
 valid transaction.
