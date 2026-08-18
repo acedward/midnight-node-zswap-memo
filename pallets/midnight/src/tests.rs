@@ -760,6 +760,65 @@ fn the_pool_rejects_v13_before_activation_and_admits_v12() {
 	});
 }
 
+/// Pool eligibility follows the branch, and flips back.
+///
+/// A reorganization across the boundary is, from the pool's point of view, exactly this: the same
+/// unchanged transaction re-validated against a candidate block at a different height. There is
+/// no staging and no future queue (spec FR-012), so eligibility must be recomputed from the
+/// candidate context every time — including *downwards*, when a longer branch is abandoned for
+/// one that has not reached activation yet (FR-014).
+///
+/// The third assertion is the one with teeth. By then the transaction has been admitted once, and
+/// `SOFT_TX_VALIDATION_CACHE` holds that success keyed by the transaction alone — no height in
+/// the key, because the key is only ever meant to answer "have we already done this proof work".
+/// It must not be allowed to answer "is this admissible here". What keeps the two apart is that
+/// the activation gate runs at decode, before the cache is consulted at all; a future
+/// "we already said yes, skip the work" short-circuit ahead of the gate would hand back the
+/// other branch's admission. Checked by construction: introducing exactly that short-circuit
+/// makes this assertion fail with `Custom(158)` expected and `ValidTransaction` returned.
+#[test]
+fn pool_eligibility_is_recomputed_per_branch_in_both_directions() {
+	let (v12, v13, block_context) = deploy_tx_both_encodings();
+	const ACTIVATION: u64 = 10;
+
+	let not_active = TransactionValidityError::Invalid(InvalidTransaction::Custom(
+		LedgerApiError::TransactionVersionNotActive.into(),
+	));
+
+	mock::new_test_ext().execute_with(|| {
+		init_ledger_state(block_context);
+		set_activation_height(ACTIVATION);
+
+		let v13_call = MidnightCall::send_mn_transaction { midnight_tx: v13 };
+		let v12_call = MidnightCall::send_mn_transaction { midnight_tx: v12 };
+		let admit = |call: &MidnightCall<Test>| {
+			<mock::Midnight as ValidateUnsigned>::validate_unsigned(
+				TransactionSource::External,
+				call,
+			)
+		};
+
+		// A branch whose next block is still below activation: refused.
+		mock::System::set_block_number(ACTIVATION - 1);
+		assert_err!(admit(&v13_call), not_active);
+
+		// Reorganized onto a branch that has reached activation: the same bytes are admitted.
+		mock::System::set_block_number(ACTIVATION);
+		assert_ok!(admit(&v13_call));
+
+		// Reorganized back below the boundary: refused again, never served from the admission
+		// it was just granted on the other branch.
+		mock::System::set_block_number(ACTIVATION - 1);
+		assert_err!(admit(&v13_call), not_active);
+
+		// The pre-memo encoding is eligible at every one of those positions, in both directions.
+		for height in [ACTIVATION - 1, ACTIVATION, ACTIVATION - 1] {
+			mock::System::set_block_number(height);
+			assert_ok!(admit(&v12_call));
+		}
+	});
+}
+
 #[cfg(feature = "experimental")]
 #[ignore = "TODO UNSHIELDED - fix when Claim Mint is properly handled for Unshielded"]
 #[test]
