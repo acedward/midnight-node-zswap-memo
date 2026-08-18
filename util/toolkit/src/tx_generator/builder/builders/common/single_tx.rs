@@ -21,7 +21,7 @@ use super::ledger_helpers_local::{
 	CoinSelectionStrategy, DefaultDB, FromContext as _, InputInfo, IntentInfo, OfferInfo,
 	OutputInfo, ProofProvider, Segment, ShieldedCoinSelectionError, ShieldedTokenType,
 	StandardTrasactionInfo, TransactionWithContext, UnshieldedOfferInfo, UnshieldedTokenType,
-	UtxoId, UtxoOutputInfo, UtxoSelectionError, UtxoSpendInfo, WalletSeed,
+	UtxoId, UtxoOutputInfo, UtxoSelectionError, UtxoSpendInfo, WalletSeed, validate_shielded_memo,
 };
 use super::output_spec::{
 	ShieldedOutputSpec, UnshieldedOutputSpec, clone_shielded_spec, clone_unshielded_spec,
@@ -49,6 +49,44 @@ pub enum SingleTxError {
 	ProvingFailed(String),
 	#[error("transaction is empty: no valid destination addresses were resolved into outputs")]
 	EmptyTransaction,
+	#[error(
+		"--memo requires ledger 9 or later, but this transaction targets ledger {version}; \
+		 earlier ledgers have no field to carry a memo"
+	)]
+	MemoUnsupportedLedger { version: u32 },
+	#[error("invalid --memo: {0}")]
+	InvalidMemo(#[source] midnight_node_ledger_helpers::ShieldedSpendError),
+	#[error(
+		"--memo applies to the shielded spend, but this transaction has no shielded output; \
+		 add a shielded --output or drop --memo"
+	)]
+	MemoWithoutShieldedSpend,
+}
+
+/// Rejects an impossible memo request before progress UI, context access, coin selection, or
+/// proving can have side effects. This common module is compiled once for each supported ledger
+/// generation, so `validate_shielded_memo` is the generation-specific source of truth.
+fn preflight_memo_request(
+	memo: Option<&[u8]>,
+	has_shielded_output: bool,
+) -> Result<(), SingleTxError> {
+	let Some(memo) = memo else {
+		return Ok(());
+	};
+
+	match validate_shielded_memo(Some(memo)) {
+		Ok(()) => {},
+		Err(midnight_node_ledger_helpers::ShieldedSpendError::MemoUnsupportedLedger {
+			version,
+		}) => return Err(SingleTxError::MemoUnsupportedLedger { version }),
+		Err(error) => return Err(SingleTxError::InvalidMemo(error)),
+	}
+
+	if !has_shielded_output {
+		return Err(SingleTxError::MemoWithoutShieldedSpend);
+	}
+
+	Ok(())
 }
 
 pub struct SingleTxBuilder<C: BuilderContext<DefaultDB>> {
@@ -61,6 +99,7 @@ pub struct SingleTxBuilder<C: BuilderContext<DefaultDB>> {
 	input_utxos: Vec<UtxoId>,
 	rng_seed: Option<[u8; 32]>,
 	coin_selection: CoinSelectionStrategy,
+	memo: Option<Vec<u8>>,
 }
 
 impl<C: BuilderContext<DefaultDB>> SingleTxBuilder<C> {
@@ -68,8 +107,18 @@ impl<C: BuilderContext<DefaultDB>> SingleTxBuilder<C> {
 		args: SingleTxArgs,
 		context: Arc<C>,
 		prover: Arc<dyn ProofProvider<DefaultDB>>,
-	) -> Self {
+	) -> Result<Self, SingleTxError> {
 		use super::type_convert::*;
+
+		// Run memo validation before any legacy CLI-shape normalization. In particular, a memo with
+		// no destination is a typed bad request; it must not reach the historical
+		// `no destinations provided` panic below. Other malformed legacy shapes retain their existing
+		// behavior once this memo-specific boundary has succeeded.
+		let has_destination = !args.outputs.is_empty() || !args.destination_address.is_empty();
+		preflight_memo_request(
+			args.memo.as_ref().map(crate::cli_parsers::MemoArg::as_bytes),
+			has_destination,
+		)?;
 
 		// CLI shape selection. Two shapes are accepted; mixing is a usage error.
 		//   (A) --output triples (address+amount+token bundled per flag)
@@ -100,6 +149,10 @@ impl<C: BuilderContext<DefaultDB>> SingleTxBuilder<C> {
 			legacy_to_output_args(&args)
 		};
 		let (shielded_outputs, unshielded_outputs) = resolve_outputs_from_triples(&output_args);
+		preflight_memo_request(
+			args.memo.as_ref().map(crate::cli_parsers::MemoArg::as_bytes),
+			!shielded_outputs.is_empty(),
+		)?;
 
 		// The builder stores only the seed value; the unshielded signature scheme is applied when
 		// the context wallet is built (see `Builder::relevant_wallet_schemes`), so the scheme half
@@ -107,7 +160,7 @@ impl<C: BuilderContext<DefaultDB>> SingleTxBuilder<C> {
 		let (source_seed, _) = args.source_seed.resolve();
 		let funding_seed = args.funding_seed.map(|s| s.resolve().0);
 
-		Self {
+		Ok(Self {
 			context,
 			prover,
 			shielded_outputs,
@@ -124,7 +177,8 @@ impl<C: BuilderContext<DefaultDB>> SingleTxBuilder<C> {
 			},
 			rng_seed: args.rng_seed,
 			coin_selection: args.coin_selection,
-		}
+			memo: args.memo.clone().map(crate::cli_parsers::MemoArg::into_bytes),
+		})
 	}
 
 	pub fn build() {}
@@ -138,6 +192,8 @@ impl<C: BuilderContext<DefaultDB>> BuildTxs for SingleTxBuilder<C> {
 		&self,
 		_received_tx: SourceTransactions,
 	) -> Result<SerializedTxBatches, Self::Error> {
+		preflight_memo_request(self.memo.as_deref(), !self.shielded_outputs.is_empty())?;
+
 		let spin = Spin::new("generating single tx...");
 
 		let context = self.context.clone();
@@ -156,6 +212,7 @@ impl<C: BuilderContext<DefaultDB>> BuildTxs for SingleTxBuilder<C> {
 				self.source_seed.clone(),
 				self.shielded_outputs.iter().map(clone_shielded_spec).collect(),
 				self.coin_selection,
+				self.memo.clone(),
 			)?;
 			if offer.outputs.len() > MAX_GUARANTEED_OUTPUTS {
 				tx_info.set_fallible_offers(HashMap::from([(1, offer)]));
@@ -199,6 +256,25 @@ impl<C: BuilderContext<DefaultDB>> BuildTxs for SingleTxBuilder<C> {
 	}
 }
 
+/// Attaches a requested memo to exactly the first selected shielded input across all token groups.
+/// Change outputs are built separately and cannot become a carrier; keeping the cross-group state
+/// explicit prevents a later group from receiving a second copy.
+fn attach_memo_to_first_selected<O>(
+	selection: &mut (Vec<InputInfo<O>>, u128),
+	memo: Option<&[u8]>,
+	memo_attached: &mut bool,
+) {
+	if *memo_attached {
+		return;
+	}
+	let (Some(memo), Some(first_input)) = (memo, selection.0.first_mut()) else {
+		return;
+	};
+
+	first_input.memo = Some(memo.to_vec());
+	*memo_attached = true;
+}
+
 /// Build a shielded offer that may contain outputs of multiple distinct token
 /// types. Inputs are selected separately per token type; one change output per
 /// token type is appended when needed.
@@ -207,6 +283,7 @@ pub(crate) fn build_shielded_offer<C: BuilderContext<DefaultDB>>(
 	funding_seed: WalletSeed,
 	outputs: Vec<ShieldedOutputSpec<DefaultDB>>,
 	coin_selection: CoinSelectionStrategy,
+	memo: Option<Vec<u8>>,
 ) -> Result<OfferInfo<DefaultDB, C>, ShieldedCoinSelectionError> {
 	// Sum amounts per token type, in the order each token type first appears so
 	// behaviour is deterministic for callers.
@@ -224,6 +301,7 @@ pub(crate) fn build_shielded_offer<C: BuilderContext<DefaultDB>>(
 
 	let mut inputs_info: Vec<Box<dyn BuildInput<DefaultDB, C>>> = Vec::new();
 	let mut outputs_info: Vec<Box<dyn BuildOutput<DefaultDB, C>>> = Vec::new();
+	let mut memo_attached = false;
 
 	// User outputs first, in the order they were given.
 	for spec in outputs {
@@ -238,13 +316,15 @@ pub(crate) fn build_shielded_offer<C: BuilderContext<DefaultDB>>(
 	// Per token type: select inputs and append a change refund if needed.
 	let select_start = std::time::Instant::now();
 	for (token_type, total_required) in totals {
-		let (token_inputs, change) = InputInfo::coins_to_cover_value(
+		let mut selection = InputInfo::coins_to_cover_value(
 			context.clone(),
 			funding_seed.clone(),
 			total_required,
 			token_type,
 			coin_selection,
 		)?;
+		attach_memo_to_first_selected(&mut selection, memo.as_deref(), &mut memo_attached);
+		let (token_inputs, change) = selection;
 
 		for input in token_inputs {
 			let input: Box<dyn BuildInput<DefaultDB, C>> = Box::new(input);
@@ -261,6 +341,11 @@ pub(crate) fn build_shielded_offer<C: BuilderContext<DefaultDB>>(
 		}
 	}
 	log::debug!("[perf] select_shielded_offer took {:?}", select_start.elapsed());
+
+	// Fail loudly rather than hand back an offer quietly missing the memo that was asked for.
+	if memo.is_some() && !memo_attached {
+		return Err(ShieldedCoinSelectionError::MemoNotAttached);
+	}
 
 	Ok(OfferInfo { inputs: inputs_info, outputs: outputs_info, transients: vec![] })
 }
@@ -378,7 +463,8 @@ pub(crate) async fn build_unshielded_intents<C: BuilderContext<DefaultDB>>(
 #[cfg(test)]
 mod tests {
 	use super::super::ledger_helpers_local::{
-		HashOutput, LedgerContext, ShieldedWallet, UnshieldedWallet,
+		HashOutput, LEDGER_VERSION, LedgerContext, LocalProofServer, ShieldedWallet,
+		UnshieldedWallet,
 	};
 	use super::*;
 
@@ -394,6 +480,170 @@ mod tests {
 		Arc::new(LedgerContext::new("test"))
 	}
 
+	fn selected_input(value: u128, token_marker: u8) -> InputInfo<WalletSeed> {
+		InputInfo {
+			origin: test_seed(),
+			token_type: ShieldedTokenType(HashOutput([token_marker; 32])),
+			value,
+			nullifier: None,
+			memo: None,
+		}
+	}
+
+	fn memo_request_without_a_destination() -> SingleTxArgs {
+		SingleTxArgs {
+			outputs: vec![],
+			shielded_amount: vec![],
+			shielded_token_type: vec![],
+			unshielded_amount: vec![],
+			unshielded_token_type: vec![],
+			source_seed: crate::cli_parsers::scheme_seed_decode(
+				"0000000000000000000000000000000000000000000000000000000000000001",
+			)
+			.expect("test source seed is valid"),
+			funding_seed: None,
+			destination_address: vec![],
+			input_utxos: vec![],
+			rng_seed: None,
+			coin_selection: CoinSelectionStrategy::LargestFirst,
+			memo: Some(
+				crate::cli_parsers::MemoArg::new(vec![0x42]).expect("one-byte memo is valid"),
+			),
+		}
+	}
+
+	#[test]
+	fn memo_preflight_uses_the_compiled_ledger_generation() {
+		let memo = [0x42];
+		let result = preflight_memo_request(Some(&memo), true);
+
+		match LEDGER_VERSION {
+			7 | 8 => assert!(matches!(
+				result,
+				Err(SingleTxError::MemoUnsupportedLedger { version })
+					if version == LEDGER_VERSION
+			)),
+			9 => assert!(result.is_ok(), "ledger 9 must accept a valid memo: {result:?}"),
+			version => panic!("test does not define memo support for ledger {version}"),
+		}
+
+		assert!(
+			preflight_memo_request(None, false).is_ok(),
+			"omitting --memo must leave unshielded-only transactions valid"
+		);
+	}
+
+	#[test]
+	fn memo_preflight_rejects_an_impossible_carrier_before_building() {
+		let result = preflight_memo_request(Some(&[0x42]), false);
+		match LEDGER_VERSION {
+			7 | 8 => assert!(matches!(
+				result,
+				Err(SingleTxError::MemoUnsupportedLedger { version })
+					if version == LEDGER_VERSION
+			)),
+			9 => assert!(matches!(result, Err(SingleTxError::MemoWithoutShieldedSpend))),
+			version => panic!("test does not define memo support for ledger {version}"),
+		}
+	}
+
+	#[test]
+	fn constructing_a_memo_request_without_a_destination_returns_a_typed_error() {
+		let prover: Arc<dyn ProofProvider<DefaultDB>> = Arc::new(LocalProofServer::new());
+		let result =
+			SingleTxBuilder::new(memo_request_without_a_destination(), test_context(), prover);
+		let error = match result {
+			Ok(_) => panic!("a memo request without a destination must be rejected"),
+			Err(error) => error,
+		};
+
+		match LEDGER_VERSION {
+			7 | 8 => assert!(matches!(
+				error,
+				SingleTxError::MemoUnsupportedLedger { version } if version == LEDGER_VERSION
+			)),
+			9 => assert!(matches!(error, SingleTxError::MemoWithoutShieldedSpend)),
+			version => panic!("test does not define memo support for ledger {version}"),
+		}
+	}
+
+	#[test]
+	fn memo_preflight_rejects_invalid_ledger_9_bytes() {
+		let result = preflight_memo_request(Some(&[]), true);
+		match LEDGER_VERSION {
+			7 | 8 => assert!(matches!(
+				result,
+				Err(SingleTxError::MemoUnsupportedLedger { version })
+					if version == LEDGER_VERSION
+			)),
+			9 => assert!(matches!(result, Err(SingleTxError::InvalidMemo(_)))),
+			version => panic!("test does not define memo support for ledger {version}"),
+		}
+	}
+
+	#[test]
+	fn memo_is_attached_once_across_input_groups_with_change() {
+		let memo = [0xde, 0xad, 0xbe, 0xef];
+		let mut memo_attached = false;
+		let mut first_token_group = (vec![selected_input(60, 1), selected_input(40, 1)], 0);
+		let mut second_token_group = (vec![selected_input(150, 2)], 50);
+
+		attach_memo_to_first_selected(&mut first_token_group, Some(&memo), &mut memo_attached);
+		attach_memo_to_first_selected(&mut second_token_group, Some(&memo), &mut memo_attached);
+
+		let carriers: Vec<&[u8]> = first_token_group
+			.0
+			.iter()
+			.chain(&second_token_group.0)
+			.filter_map(|input| input.memo.as_deref())
+			.collect();
+		assert_eq!(carriers, vec![memo.as_slice()]);
+		assert_eq!(first_token_group.1, 0);
+		assert_eq!(second_token_group.1, 50, "change accounting must be left untouched");
+	}
+
+	#[test]
+	fn memo_with_an_empty_wallet_returns_no_selected_input_error() {
+		let context =
+			Arc::new(LedgerContext::<DefaultDB>::new_from_wallet_seeds("test", &[test_seed()]));
+		let token_type = ShieldedTokenType(HashOutput([0u8; 32]));
+		let outputs = vec![ShieldedOutputSpec {
+			wallet: ShieldedWallet::default(test_seed_2()),
+			amount: 1,
+			token_type,
+		}];
+
+		let result = build_shielded_offer(
+			context,
+			test_seed(),
+			outputs,
+			CoinSelectionStrategy::default(),
+			Some(vec![0x42]),
+		);
+
+		assert!(matches!(
+			result,
+			Err(ShieldedCoinSelectionError::InsufficientBalance {
+				required: 1,
+				token_type: actual_token,
+				..
+			}) if actual_token == token_type
+		));
+	}
+
+	#[test]
+	fn memo_without_any_selected_group_returns_memo_not_attached() {
+		let result = build_shielded_offer(
+			test_context(),
+			test_seed(),
+			Vec::new(),
+			CoinSelectionStrategy::default(),
+			Some(vec![0x42]),
+		);
+
+		assert!(matches!(result, Err(ShieldedCoinSelectionError::MemoNotAttached)));
+	}
+
 	#[test]
 	fn build_shielded_offer_mul_overflow_returns_arithmetic_error() {
 		let context = test_context();
@@ -406,8 +656,13 @@ mod tests {
 			ShieldedOutputSpec { wallet: wallet2, amount: u128::MAX, token_type },
 		];
 
-		let result =
-			build_shielded_offer(context, test_seed(), outputs, CoinSelectionStrategy::default());
+		let result = build_shielded_offer(
+			context,
+			test_seed(),
+			outputs,
+			CoinSelectionStrategy::default(),
+			None,
+		);
 
 		assert!(matches!(result, Err(ShieldedCoinSelectionError::ArithmeticOverflow)));
 	}

@@ -1,0 +1,97 @@
+{
+  "corpus": "v12/v13 encoding-differential corpus (sub-01 phase 6)",
+  "genesis": "res/genesis/genesis_block_undeployed.mn",
+  "network": "undeployed",
+  "generator": "scripts/tests/generate-encoding-corpus.sh",
+  "generated_at_node_commit": "68e97ee2c5e85f92a62373d13ba49555e327f3d1",
+  "note": "Entries are ordered: each was built against the genesis state plus every entry before it, so the harness must apply them in this order from a fresh genesis.",
+  "entries": [
+    {
+      "name": "shielded-fanout",
+      "file": "shielded-fanout.mn",
+      "kind": "shielded fan-out: one spend split into several shielded outputs",
+      "dual_encoded": true,
+      "role": "chain",
+      "sha256": "c4b139bede2f3b5ef19f4dd13f29867bdbd4bb5990dd58920c2d6a69dbfd8395",
+      "provenance": "generate-txs single-tx --source-seed 0000000000000000000000000000000000000000000000000000000000000001 --output addr=mn_shield-addr_undeployed1tth9g6jf8he6cmhgtme6arty0jde7wnypsg53qc3x5navl9za355jqqvfftm8asg986dx9puzwkmedeune9nfkuqvtmccmxtjwvlrvccwypcs,amount=100 --output addr=mn_shield-addr_undeployed1tth9g6jf8he6cmhgtme6arty0jde7wnypsg53qc3x5navl9za355jqqvfftm8asg986dx9puzwkmedeune9nfkuqvtmccmxtjwvlrvccwypcs,amount=200 --output addr=mn_shield-addr_undeployed1tth9g6jf8he6cmhgtme6arty0jde7wnypsg53qc3x5navl9za355jqqvfftm8asg986dx9puzwkmedeune9nfkuqvtmccmxtjwvlrvccwypcs,amount=300 --rng-seed 0000000000000000000000000000000000000000000000000000000000000041 (chained on 0 prior source file(s))"
+    },
+    {
+      "name": "multi-input-spend",
+      "file": "multi-input-spend.mn",
+      "kind": "multi-input shielded spend: every coin the fan-out created, in one offer",
+      "dual_encoded": true,
+      "role": "chain",
+      "sha256": "4daf215de035295c565782ba8c13a7377b9096d8a328c9d065dcfead76aa404c",
+      "provenance": "generate-txs single-tx --source-seed 0000000000000000000000000000000000000000000000000000000000000002 --coin-selection smallest-first --output addr=mn_shield-addr_undeployed1ngp7ce7cqclgucattj5kuw68v3s4826e9zwalhhmurymwet3v7psvrs4gtpv5p2zx8rd3jxpgjr4m8mxh7js7u3l33g23gcty67uq9cug4xep,amount=550 --rng-seed 0000000000000000000000000000000000000000000000000000000000000042 (chained on 1 prior source file(s))"
+    },
+    {
+      "name": "guaranteed-offer-batch",
+      "file": "guaranteed-offer-batch.mn",
+      "kind": "guaranteed shielded offer plus an unshielded intent",
+      "dual_encoded": true,
+      "role": "chain",
+      "sha256": "dd104746ad80af37f125a64dc2aebd8016ea6a4270ab0b89a9c05805eea6c63b",
+      "provenance": "generate-txs batches --funding-seed 0000000000000000000000000000000000000000000000000000000000000001 -n 4 -b 0 --enable-shielded -c 250 --rng-seed 0000000000000000000000000000000000000000000000000000000000000043 (chained on 2 prior source file(s))"
+    },
+    {
+      "name": "mixed-shielded-unshielded",
+      "file": "mixed-shielded-unshielded.mn",
+      "kind": "one transaction paying a shielded and an unshielded destination",
+      "dual_encoded": true,
+      "role": "chain",
+      "sha256": "4004cc4b1f409494491df7618d63a4171f10c028a0bb28abb7b00f0ceab28e7d",
+      "provenance": "generate-txs single-tx --source-seed 0000000000000000000000000000000000000000000000000000000000000001 --output addr=mn_shield-addr_undeployed1gyty7da22zpvkxzzs49tkdyncmp52j6mcwd8ylhj0tn624lg06803z3khgra9vdppqmfar23y5h9wh9f5z7shvr0hy5hc3cnqadp8ycas3wg0,amount=75 --output addr=mn_addr_undeployed12vv6yst6exn50pkjjq54tkmtjpyggmr2p07jwpk6pxd088resqzqszfgak,amount=1000 --rng-seed 0000000000000000000000000000000000000000000000000000000000000044 (chained on 3 prior source file(s))"
+    },
+    {
+      "name": "contract-deploy",
+      "file": "contract-deploy.mn",
+      "kind": "contract deploy",
+      "dual_encoded": true,
+      "role": "chain",
+      "sha256": "6262ccc5dd659490bf3565c101fbbceadeccbee3c1cabc432e8b0f1f5372ba11",
+      "provenance": "generate-txs contract-simple deploy --funding-seed 0000000000000000000000000000000000000000000000000000000000000001 --rng-seed 0000000000000000000000000000000000000000000000000000000000000045 (chained on 4 prior source file(s))"
+    },
+    {
+      "name": "contract-call",
+      "file": "contract-call.mn",
+      "kind": "contract call (store)",
+      "dual_encoded": true,
+      "role": "chain",
+      "sha256": "9a64d586dd844cdea47c1ba3f955a1fec8829739bc2471b0400178ca199b19d3",
+      "provenance": "generate-txs contract-simple call --funding-seed 0000000000000000000000000000000000000000000000000000000000000001 --call-key store --contract-address 53c28f598484f9b4e0c922640f0832bb7437ef3de8c74da36f16d11f4fe2c74f --rng-seed 0000000000000000000000000000000000000000000000000000000000000046 (chained on 5 prior source file(s))"
+    },
+    {
+      "name": "contract-maintenance",
+      "file": "contract-maintenance.mn",
+      "kind": "contract maintenance update (replace authority)",
+      "dual_encoded": true,
+      "role": "chain",
+      "sha256": "eda0664311d9e30def4ed5da647a666420565b878e5afd771e6498948fe68584",
+      "provenance": "generate-txs contract-simple maintenance --funding-seed 0000000000000000000000000000000000000000000000000000000000000001 --contract-address 53c28f598484f9b4e0c922640f0832bb7437ef3de8c74da36f16d11f4fe2c74f --new-authority-seed 0000000000000000000000000000000000000000000000000000000000000002 --rng-seed 0000000000000000000000000000000000000000000000000000000000000047 (chained on 6 prior source file(s))"
+    },
+    {
+      "name": "claim-rewards",
+      "file": "claim-rewards.mn",
+      "kind": "claim-rewards: the non-Standard transaction variant",
+      "dual_encoded": true,
+      "role": "chain",
+      "sha256": "5f7bd99b106cbcc44816c47ddc0db76d8f5cab48568a2e352e43ae1a4136561e",
+      "provenance": "generate-txs claim-rewards --funding-seed 0000000000000000000000000000000000000000000000000000000000000001 --amount 500000 --claim-kind reward --rng-seed 0000000000000000000000000000000000000000000000000000000000000048 (chained on 7 prior source file(s))"
+    },
+    {
+      "name": "memo-bearing",
+      "file": "memo-bearing.mn",
+      "kind": "memo-bearing shielded spend — v13 only, has no v12 encoding by construction",
+      "dual_encoded": false,
+      "role": "companion",
+      "sha256": "bc6dfc448e8dc4b3e99c81ef762946a8b8d34d1e0875c7742b0919c2d3bd1575",
+      "provenance": "generate-txs single-tx --source-seed 0000000000000000000000000000000000000000000000000000000000000003 --output addr=mn_shield-addr_undeployed1gyty7da22zpvkxzzs49tkdyncmp52j6mcwd8ylhj0tn624lg06803z3khgra9vdppqmfar23y5h9wh9f5z7shvr0hy5hc3cnqadp8ycas3wg0,amount=200 --memo 656e636f64696e6720636f72707573 --rng-seed 0000000000000000000000000000000000000000000000000000000000000049 (chained on 8 prior source file(s))"
+    }
+  ],
+  "cross_boundary_block": {
+    "file": "cross-boundary-block.mn",
+    "sha256": "f7bc3d040b4dc4d656d6b94c7037467d1a089823dca5b35833846b49233cc53b",
+    "kind": "three transactions: batch 0 funds two independent wallets, batch 1 holds the two transactions meant to share one block",
+    "provenance": "generate-txs batches --funding-seed <seed1> -n 2 -b 1 --rng-seed ...0050 (companion of the chain above, not part of it)"
+  }
+}

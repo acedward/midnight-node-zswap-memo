@@ -26,6 +26,8 @@ pub type TokensBalance = HashMap<ShieldedTokenType, u128>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OfferBuildError {
+	#[error("failed to build shielded input: {0}")]
+	Input(#[from] crate::ShieldedSpendError),
 	#[error("token value {value} exceeds maximum representable delta (i128::MAX)")]
 	DeltaOverflow { value: u128 },
 	#[error("delta accumulation overflow")]
@@ -70,7 +72,7 @@ impl<D: DB + Clone, C: BuilderContext<D>> OfferInfo<D, C> {
 		self.inputs.iter_mut().try_fold(
 			(Vec::new(), TokensBalance::default()),
 			|(mut inputs, mut tokens_balance), input| {
-				inputs.push(input.build(rng, context.clone()));
+				inputs.push(input.build(rng, context.clone())?);
 				let value = input.value();
 				match tokens_balance.entry(input.token_type()) {
 					Entry::Occupied(mut e) => {

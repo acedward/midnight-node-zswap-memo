@@ -31,6 +31,62 @@ impl From<Hash128> for WrappedHash {
 	}
 }
 
+/// Consensus-authoritative data — beyond the block's own clock, which [`BlockContext`] already
+/// carries — that decides which transaction *wire versions* a candidate block may contain.
+///
+/// [`BlockContext`]: crate::latest::BlockContext
+///
+/// Both fields come from the candidate block's own position and its parent state, never from
+/// local wall-clock time, startup order, or a node-local setting, so a reorganization
+/// re-evaluates activation by construction: the replacement branch supplies its own height and
+/// reads its own chain configuration (spec FR-007/FR-010).
+///
+/// This is a separate struct rather than two more `BlockContext` fields because `BlockContext`
+/// mirrors the ledger's own type and is shared by every ledger generation, while this data is
+/// meaningful only from ledger 9 on. Keeping it apart also keeps the host-interface versioning
+/// honest: the ledger-9 bridge grew a *second* version of each transaction entry point to carry
+/// it, and the original version — which historical runtimes still call — is unchanged.
+#[derive(Encode, Decode, DecodeWithMemTracking, TypeInfo, Clone, Debug, Eq, PartialEq, Default)]
+pub struct ConsensusContext {
+	/// Height of the candidate block whose validity is being decided. On the pool path this is
+	/// the height of the block the submission would first be eligible for, i.e. parent + 1.
+	pub block_height: u64,
+	/// First block height at which memo-capable transactions are accepted. `0` — the default,
+	/// and the deployed value for dev/undeployed/test networks — means active from genesis, so
+	/// nothing changes for a chain that never had pre-memo history.
+	pub memo_activation_height: u64,
+}
+
+impl ConsensusContext {
+	/// A context in which memos are never active, used for the *original* version of each
+	/// ledger-9 transaction host function. Those are the entry points historical runtimes call,
+	/// and a runtime that predates this change is by definition a runtime under which the memo
+	/// upgrade has not activated: it must keep accepting pre-memo transactions and keep
+	/// rejecting memo-capable ones, exactly as it did before.
+	pub const MEMO_NEVER_ACTIVE: Self =
+		ConsensusContext { block_height: 0, memo_activation_height: u64::MAX };
+
+	/// Whether the memo-capable wire version is accepted in this candidate block.
+	pub fn memo_active(&self) -> bool {
+		self.block_height >= self.memo_activation_height
+	}
+}
+
+/// Which transaction wire encoding a submission arrived in, as far as the memo activation
+/// boundary is concerned.
+///
+/// The distinction is about the *encoding*, not about whether a memo is present: a memo-less
+/// transaction has a valid encoding in both eras, and which one it was sent in is what the
+/// activation rule is written against.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TxWireEra {
+	/// The pre-memo encoding — `transaction[v12]` under ledger 9, and the only encoding earlier
+	/// ledger generations have. Accepted at any height, indefinitely (spec FR-011).
+	PreMemo,
+	/// The memo-capable encoding, `transaction[v13]`. Gated on the activation height.
+	MemoCapable,
+}
+
 #[derive(Encode, Decode, DecodeWithMemTracking)]
 pub struct TransactionApplied {
 	pub tx_hash: Hash,
@@ -275,4 +331,45 @@ pub struct UtxoInfo {
 	pub intent_hash: Hash,
 	pub value: u128,
 	pub output_no: u32,
+}
+
+#[cfg(test)]
+mod tests {
+	use super::ConsensusContext;
+
+	fn at(block_height: u64, memo_activation_height: u64) -> ConsensusContext {
+		ConsensusContext { block_height, memo_activation_height }
+	}
+
+	/// The boundary is inclusive: a candidate block *at* the activation height already accepts
+	/// the memo-capable encoding. `pallet-midnight`'s
+	/// `v13_activates_at_exactly_the_configured_height` pins the same rule end to end.
+	#[test]
+	fn activation_is_inclusive_of_its_own_height() {
+		assert!(!at(41, 42).memo_active());
+		assert!(at(42, 42).memo_active());
+		assert!(at(43, 42).memo_active());
+	}
+
+	/// Zero is the deployed value for dev, undeployed and test networks, and means active from
+	/// the first block — which is what keeps a fresh chain behaving exactly as it does today.
+	#[test]
+	fn zero_activates_at_genesis() {
+		assert!(at(0, 0).memo_active());
+		assert!(ConsensusContext::default().memo_active());
+	}
+
+	/// `MEMO_NEVER_ACTIVE` is what the *original* version of each ledger-9 transaction host
+	/// function passes, and historical runtimes are the ones that call it. Correct replay of a
+	/// pre-memo chain depends on this constant closing the gate at every height a block can
+	/// have — if it ever answered `true`, an already-deployed runtime would start accepting
+	/// transactions its own consensus rules never authorized.
+	#[test]
+	fn memo_never_active_closes_the_gate_at_every_height() {
+		for height in [0, 1, 1_000_000, u64::MAX - 1] {
+			let ctx =
+				ConsensusContext { block_height: height, ..ConsensusContext::MEMO_NEVER_ACTIVE };
+			assert!(!ctx.memo_active(), "memos must stay inactive at height {height}");
+		}
+	}
 }

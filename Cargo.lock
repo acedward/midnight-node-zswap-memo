@@ -3046,7 +3046,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab67060fc6b8ef687992d439ca0fa36e7ed17e9a0b16b25b601e8757df720de"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -5687,7 +5687,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.57.0",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -7851,7 +7851,7 @@ dependencies = [
 [[package]]
 name = "midnight-ledger-v9"
 version = "1.0.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=crate-ledger-9.1.0.0-rc.3#85e769a0e352518c979cb6f7a07901b63e1c124d"
+source = "git+https://github.com/acedward/midnight-ledger-zswap-memo?rev=375ad7a89d82a87a4f2c0c1228df5ad8b720f476#375ad7a89d82a87a4f2c0c1228df5ad8b720f476"
 dependencies = [
  "anyhow",
  "derive-where",
@@ -8995,7 +8995,7 @@ dependencies = [
 [[package]]
 name = "midnight-zswap"
 version = "9.0.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=zswap-9.0.0-rc.3#d495446e618ea92577d920bfdf01f3eb1118a322"
+source = "git+https://github.com/acedward/midnight-ledger-zswap-memo?rev=375ad7a89d82a87a4f2c0c1228df5ad8b720f476#375ad7a89d82a87a4f2c0c1228df5ad8b720f476"
 dependencies = [
  "anyhow",
  "derive-where",
@@ -10543,14 +10543,20 @@ dependencies = [
  "frame-system",
  "hex",
  "log",
+ "midnight-ledger-v9",
  "midnight-node-ledger",
  "midnight-node-ledger-helpers",
  "midnight-node-res",
  "midnight-primitives",
  "midnight-primitives-ledger",
+ "midnight-serialize",
+ "midnight-storage 2.0.1",
+ "midnight-transient-crypto 3.0.0",
  "pallet-timestamp",
  "parity-scale-codec",
  "scale-info",
+ "serde_json",
+ "sha2 0.10.9",
  "sidechain-domain",
  "sp-api",
  "sp-core",
@@ -12492,7 +12498,7 @@ version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "itertools 0.14.0",
  "log",
  "multimap",
@@ -12512,7 +12518,7 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "itertools 0.14.0",
  "log",
  "multimap",

@@ -492,5 +492,24 @@ mod tests {
 		assert_eq!(ledger.get_unclaimed_amount(rewards_addr), Some(&5_678u128));
 		assert_eq!(ledger.get_unclaimed_amount(bridge_addr), None);
 	}
+
+	/// A genuine pre-memo `transaction[v12]` specimen must fail the *strict* single-version
+	/// reader cleanly — a structured deserialization error, never a panic. This is permanent
+	/// policy, not a stopgap: historical decoding goes through the version-preserving envelope
+	/// (`prior_versions::versioned_deserialize`, exercised in `tests/v12_transition.rs`), and
+	/// the strict path stays `[v13]`-only so a v12 value can never silently acquire a v13
+	/// header. Unguarded because the clean-failure property must hold in every generation.
+	#[test]
+	fn v12_transaction_is_rejected_cleanly_by_the_v13_reader() {
+		use super::super::LedgerApiError;
+		use super::super::transaction::Transaction;
+		use midnight_node_res::undeployed::transactions::RAW_TX_V12;
+
+		let api = Api::new();
+		let err = api
+			.tagged_deserialize::<Transaction<Signature, DefaultDB>>(RAW_TX_V12)
+			.expect_err("a v12 transaction must not decode under v13-only rules yet");
+		assert!(matches!(err, LedgerApiError::Deserialization(_)), "got {err:?}");
+	}
 }
 // grcov-excl-stop

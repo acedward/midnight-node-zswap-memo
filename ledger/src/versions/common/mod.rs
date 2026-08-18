@@ -84,9 +84,9 @@ use {
 };
 
 use crate::common::types::{
-	ContractCallsDetails, FallibleCoinsDetails, GasCost, GuaranteedCoinsDetails, Hash, Op,
-	SystemTransactionAppliedStateRoot, TransactionAppliedStateRoot, TransactionDetails, Tx,
-	WrappedHash,
+	ConsensusContext, ContractCallsDetails, FallibleCoinsDetails, GasCost, GuaranteedCoinsDetails,
+	Hash, Op, SystemTransactionAppliedStateRoot, TransactionAppliedStateRoot, TransactionDetails,
+	Tx, TxWireEra, WrappedHash,
 };
 
 use super::BlockContext;
@@ -316,11 +316,44 @@ where
 		crate::utils::find_crate_version(super::CRATE_NAME).unwrap_or(b"unknown".into())
 	}
 
+	/// Decodes a submitted transaction and enforces the memo-activation boundary.
+	///
+	/// The gate runs at decode, and so before any ledger state is read, any validation cache is
+	/// consulted, and anything is written: a transaction whose wire version is not yet active in
+	/// this candidate block is rejected with a structured error, having mutated nothing (spec
+	/// FR-009). That ordering is also why the validation caches need no new key material — a
+	/// gated transaction never reaches them, so no cached verdict can outlive the boundary it was
+	/// computed under. (The keys distinguish the two encodings anyway: they are taken over the
+	/// transaction *bytes*, and the same transaction has different bytes in each era.)
+	///
+	/// The pre-memo encoding is accepted at every height, permanently (spec FR-011).
+	fn decode_transaction(
+		api: &api::Api,
+		tx_serialized: &[u8],
+		consensus: &ConsensusContext,
+	) -> Result<Transaction<S, D>, LedgerApiError> {
+		let (tx, era) = super::tx_envelope::decode_versioned::<S, D>(api, tx_serialized)?;
+
+		if era == TxWireEra::MemoCapable && !consensus.memo_active() {
+			log::warn!(
+				target: LOG_TARGET,
+				"🚫 Rejecting transaction {}: its wire version activates at block height {}, and this candidate block is {}",
+				hex::encode(tx.hash()),
+				consensus.memo_activation_height,
+				consensus.block_height,
+			);
+			return Err(LedgerApiError::TransactionVersionNotActive);
+		}
+
+		Ok(tx)
+	}
+
 	pub fn apply_transaction(
 		mut externalities: &mut dyn Externalities,
 		state_key: &[u8],
 		tx_serialized: &[u8],
 		block_context: BlockContext,
+		consensus: ConsensusContext,
 		should_skip_failed_segments: bool,
 		runtime_version: u32,
 	) -> Result<TransactionAppliedStateRoot, LedgerApiError>
@@ -342,7 +375,7 @@ where
 			"⏱️  Deserializing tx (elapsed_ms={})",
 			start_tx_processing_time.elapsed().as_millis()
 		);
-		let tx = api.tagged_deserialize::<Transaction<S, D>>(tx_serialized)?;
+		let tx = Self::decode_transaction(&api, tx_serialized, &consensus)?;
 		let tx_hash = tx.hash();
 		log::info!(
 			target: LOG_TARGET,
@@ -580,11 +613,17 @@ where
 		Ok(event)
 	}
 
+	// Eight arguments: the four that describe *what* is being validated, the two contexts that
+	// describe *where* (block clock, consensus position), and two caller switches. Grouping them
+	// into a struct would only move the same fields across the host-API boundary, where they are
+	// already passed one by one.
+	#[allow(clippy::too_many_arguments)]
 	pub fn validate_transaction(
 		mut externalities: &mut dyn Externalities,
 		state_key: &[u8],
 		tx_serialized: &[u8],
 		block_context: BlockContext,
+		consensus: ConsensusContext,
 		runtime_version: u32,
 		// The runtime's max weight as of now
 		max_weight: u64,
@@ -594,7 +633,7 @@ where
 		let start_tx_validation_time = Instant::now();
 
 		let api = api::new();
-		let tx = api.tagged_deserialize::<Transaction<S, D>>(tx_serialized)?;
+		let tx = Self::decode_transaction(&api, tx_serialized, &consensus)?;
 		let ledger = Self::get_ledger(&api, state_key)?;
 
 		let wrapped_cache_key = Self::tx_validation_cache_key(runtime_version, tx_serialized);
@@ -605,8 +644,13 @@ where
 			Self::do_validate_transaction(&ledger, &tx, &block_context, &wrapped_cache_key)?;
 
 		let tx_details = if get_tx_details {
-			let tx_gas_cost =
-				Self::get_transaction_cost(state_key, tx_serialized, &block_context, max_weight)?;
+			let tx_gas_cost = Self::get_transaction_cost(
+				state_key,
+				tx_serialized,
+				&block_context,
+				&consensus,
+				max_weight,
+			)?;
 
 			Some(Self::get_transaction_details(&tx, &ledger, tx_gas_cost)?)
 		} else {
@@ -648,13 +692,14 @@ where
 		state_key: &[u8],
 		tx_serialized: &[u8],
 		block_context: BlockContext,
+		consensus: ConsensusContext,
 		runtime_version: u32,
 	) -> Result<(), LedgerApiError>
 	where
 		VerifiedTransaction<D>: Send + Sync + 'static,
 	{
 		let api = api::new();
-		let tx = api.tagged_deserialize::<Transaction<S, D>>(tx_serialized)?;
+		let tx = Self::decode_transaction(&api, tx_serialized, &consensus)?;
 		let ledger = Self::get_ledger(&api, state_key)?;
 
 		let cache_key = Self::tx_validation_cache_key(runtime_version, tx_serialized);
@@ -687,9 +732,12 @@ where
 		Ok(())
 	}
 
+	/// Decodes a transaction for inspection (RPC, mempool filtering). Deliberately ungated: this
+	/// reports what a transaction *is*, not whether it may enter a block, and it has to be able
+	/// to describe historical pre-memo transactions at any height.
 	pub fn get_decoded_transaction(transaction_bytes: &[u8]) -> Result<Tx, LedgerApiError> {
 		let api = api::new();
-		let tx = api.tagged_deserialize::<Transaction<S, D>>(transaction_bytes)?;
+		let (tx, _era) = super::tx_envelope::decode_versioned::<S, D>(&api, transaction_bytes)?;
 		let hash = tx.hash();
 		let operations = tx.calls_and_deploys(None).try_fold(Vec::new(), |mut acc, cd| {
 			let a = match cd {
@@ -826,10 +874,11 @@ where
 		state_key: &[u8],
 		tx: &[u8],
 		_block_context: &BlockContext,
+		consensus: &ConsensusContext,
 		max_weight: u64,
 	) -> Result<GasCost, LedgerApiError> {
 		let api = api::new();
-		let tx = api.tagged_deserialize::<Transaction<S, D>>(tx)?;
+		let tx = Self::decode_transaction(&api, tx, consensus)?;
 		let ledger = Self::get_ledger(&api, state_key)?;
 
 		let cost =

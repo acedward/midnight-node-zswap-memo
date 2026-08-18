@@ -128,5 +128,59 @@ pub mod undeployed {
 		#[cfg(feature = "test")]
 		pub const CLAIM_MINT_TX: &[u8] =
 			include_bytes!("../test-claim-mint/claim_mint_undeployed.mn");
+		/// A raw `midnight:transaction[v12]`-tagged transaction, extracted from the
+		/// pre-memo fixture set (node history at `bd79beb0`, before the `[v13]` regeneration).
+		/// Kept so the v12->v13 transition work has a genuine old-format specimen: today's
+		/// reader must fail on it *cleanly*, and a future prior-version decoder must accept it.
+		#[cfg(feature = "test")]
+		pub const RAW_TX_V12: &[u8] = include_bytes!("../test-tx-deserialize/raw_tx_v12.bin");
+	}
+}
+
+/// The v12/v13 encoding-differential corpus (sub-01 phase 6).
+///
+/// One ordered chain of scripted transactions against the `undeployed` genesis: every entry was
+/// built from the genesis state plus every entry before it, so replaying them in this order from
+/// a fresh genesis is exactly the situation each was proven for. `MANIFEST` carries the kind,
+/// provenance and SHA-256 of each entry; the harness reverifies those hashes against `ENTRIES`
+/// before it trusts a byte of this.
+///
+/// Regenerate with `scripts/tests/generate-encoding-corpus.sh`. Adding an entry means adding a
+/// line here too — the bytes are embedded rather than read from disk so the harness does not
+/// depend on the working directory a test happens to run in.
+#[cfg(feature = "test")]
+pub mod encoding_corpus {
+	pub const MANIFEST: &[u8] = include_bytes!("../test-encoding-corpus/manifest.json");
+
+	/// Every corpus file, by manifest `file` name. Order is irrelevant here — the manifest is
+	/// what fixes the replay order.
+	pub const ENTRIES: &[(&str, &[u8])] = &[
+		("shielded-fanout.mn", include_bytes!("../test-encoding-corpus/shielded-fanout.mn")),
+		("multi-input-spend.mn", include_bytes!("../test-encoding-corpus/multi-input-spend.mn")),
+		(
+			"guaranteed-offer-batch.mn",
+			include_bytes!("../test-encoding-corpus/guaranteed-offer-batch.mn"),
+		),
+		(
+			"mixed-shielded-unshielded.mn",
+			include_bytes!("../test-encoding-corpus/mixed-shielded-unshielded.mn"),
+		),
+		("contract-deploy.mn", include_bytes!("../test-encoding-corpus/contract-deploy.mn")),
+		("contract-call.mn", include_bytes!("../test-encoding-corpus/contract-call.mn")),
+		(
+			"contract-maintenance.mn",
+			include_bytes!("../test-encoding-corpus/contract-maintenance.mn"),
+		),
+		("claim-rewards.mn", include_bytes!("../test-encoding-corpus/claim-rewards.mn")),
+		("memo-bearing.mn", include_bytes!("../test-encoding-corpus/memo-bearing.mn")),
+		(
+			"cross-boundary-block.mn",
+			include_bytes!("../test-encoding-corpus/cross-boundary-block.mn"),
+		),
+	];
+
+	/// The bytes of one corpus entry, by its manifest `file` name.
+	pub fn entry(file: &str) -> Option<&'static [u8]> {
+		ENTRIES.iter().find(|(name, _)| *name == file).map(|(_, bytes)| *bytes)
 	}
 }

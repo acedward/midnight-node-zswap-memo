@@ -221,6 +221,15 @@ impl UnshieldedUtxos {
 }
 
 impl<S: SignatureKind<D>, D: DB> Transaction<S, D> {
+	/// Wraps a ledger transaction. Used by the ledger-9 decoder in `tx_envelope`, which reaches
+	/// the inner type through the v12/v13 envelope rather than through `Deserializable`. Earlier
+	/// generations decode straight into this type and never need the constructor, hence the
+	/// allow: this file compiles into all three.
+	#[allow(dead_code)]
+	pub(crate) fn new(tx: InnerTx<S, D>) -> Self {
+		Transaction(tx)
+	}
+
 	pub(crate) fn hash(&self) -> Hash {
 		self.0.transaction_hash().0.0
 	}

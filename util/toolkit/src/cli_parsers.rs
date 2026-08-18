@@ -248,6 +248,52 @@ pub fn hex_bytes(input: &str) -> Result<Vec<u8>, clap::error::Error> {
 	})
 }
 
+/// A zswap input memo, as raw bytes. A newtype rather than a bare `Vec<u8>` because clap reads
+/// `Vec<T>` as a repeatable argument, which does not match a parser producing the whole value.
+#[derive(Clone, Debug)]
+pub struct MemoArg(Vec<u8>);
+
+impl MemoArg {
+	/// Checked programmatic construction. CLI parsing and direct API callers share this boundary,
+	/// so constructing `SingleTxArgs` manually cannot bypass the ledger's length rule.
+	pub fn new(bytes: Vec<u8>) -> Result<Self, clap::error::Error> {
+		use midnight_node_ledger_helpers::latest::zswap::MAX_MEMO_BYTES;
+		if bytes.is_empty() || bytes.len() > MAX_MEMO_BYTES {
+			return Err(clap::Error::raw(
+				clap::error::ErrorKind::ValueValidation,
+				format!("memo must be 1..={MAX_MEMO_BYTES} bytes, got {}\n", bytes.len()),
+			));
+		}
+		Ok(Self(bytes))
+	}
+
+	pub fn as_bytes(&self) -> &[u8] {
+		&self.0
+	}
+
+	pub fn into_bytes(self) -> Vec<u8> {
+		self.0
+	}
+}
+
+impl TryFrom<Vec<u8>> for MemoArg {
+	type Error = clap::error::Error;
+
+	fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
+		Self::new(bytes)
+	}
+}
+
+/// Parses a hex-encoded zswap input memo, enforcing the ledger's size bounds up front so an
+/// oversized memo is a CLI error rather than a failure deep in the builder.
+///
+/// The bound is taken from the ledger rather than restated here. A local copy would be free to
+/// drift, and either direction is a bug: too small and the CLI refuses memos the chain accepts,
+/// too large and the user gets a rejection from the builder after paying for coin selection.
+pub fn memo_decode(input: &str) -> Result<MemoArg, clap::error::Error> {
+	MemoArg::new(hex_bytes(input)?)
+}
+
 pub fn hex_str_decode<T>(input: &str) -> Result<T, clap::error::Error>
 where
 	T: TryFrom<Vec<u8>, Error = Vec<u8>>,
@@ -364,6 +410,87 @@ mod tests {
 	fn coin_public_decode_rejects_invalid_hex() {
 		let res = coin_public_decode("not-valid-hex!!");
 		assert!(res.is_err(), "invalid hex should be rejected");
+	}
+
+	// `memo_decode` — every rejection must be a typed clap error, never a panic, and the CLI must
+	// agree with the ledger about which sizes exist.
+
+	#[test]
+	fn memo_decode_accepts_the_ledger_length_boundary() {
+		use midnight_node_ledger_helpers::latest::zswap::MAX_MEMO_BYTES;
+
+		// 1, both sides of the 31-byte packing chunk, and the cap.
+		for len in [1usize, 31, 32, 511, MAX_MEMO_BYTES] {
+			let hex = "a5".repeat(len);
+			let decoded = memo_decode(&hex)
+				.unwrap_or_else(|e| panic!("a {len}-byte memo must be accepted, got {e}"));
+			assert_eq!(decoded.as_bytes().len(), len);
+			assert!(decoded.as_bytes().iter().all(|b| *b == 0xa5), "bytes must survive verbatim");
+		}
+	}
+
+	#[test]
+	fn memo_decode_rejects_empty() {
+		// An empty memo is not "no memo": absence is expressed by omitting `--memo` entirely, and
+		// the ledger gives absence exactly one representation.
+		let err = memo_decode("").expect_err("an empty memo must be rejected");
+		assert!(err.to_string().contains("must be 1..="), "unhelpful error: {err}");
+	}
+
+	#[test]
+	fn memo_decode_rejects_oversized() {
+		use midnight_node_ledger_helpers::latest::zswap::MAX_MEMO_BYTES;
+
+		let hex = "00".repeat(MAX_MEMO_BYTES + 1);
+		let err = memo_decode(&hex).expect_err("an oversized memo must be rejected");
+		let rendered = err.to_string();
+		assert!(rendered.contains("must be 1..="), "unhelpful error: {rendered}");
+		// The size the user actually supplied has to appear, or they cannot tell by how much they
+		// overshot.
+		assert!(
+			rendered.contains(&(MAX_MEMO_BYTES + 1).to_string()),
+			"error should report the supplied size: {rendered}"
+		);
+	}
+
+	#[test]
+	fn memo_decode_rejects_malformed_hex() {
+		// Non-hex characters, an odd digit count, and embedded whitespace. The odd-length case is
+		// the one that matters most: a decoder that dropped the trailing nibble would silently
+		// produce a memo the user did not ask for, and it would still be authenticated.
+		for bad in ["zz", "not-hex!!", "abc", "00 11", "0x"] {
+			assert!(
+				memo_decode(bad).is_err(),
+				"malformed hex {bad:?} must be rejected rather than silently truncated"
+			);
+		}
+	}
+
+	#[test]
+	fn memo_decode_accepts_an_0x_prefix() {
+		// `hex_bytes` strips `0x` for every hex argument in the toolkit, so `--memo` follows the
+		// same convention rather than being the one flag that refuses it.
+		assert_eq!(memo_decode("0xa5").expect("0x-prefixed hex is accepted").as_bytes(), &[0xa5]);
+		assert_eq!(memo_decode("a5").expect("bare hex is accepted").as_bytes(), &[0xa5]);
+	}
+
+	#[test]
+	fn memo_arg_programmatic_construction_is_checked() {
+		use midnight_node_ledger_helpers::latest::zswap::MAX_MEMO_BYTES;
+
+		assert!(MemoArg::new(Vec::new()).is_err());
+		assert!(MemoArg::try_from(vec![0u8; MAX_MEMO_BYTES + 1]).is_err());
+		let valid = MemoArg::new(vec![0x5a; MAX_MEMO_BYTES]).expect("the cap is valid");
+		assert_eq!(valid.as_bytes().len(), MAX_MEMO_BYTES);
+		assert_eq!(valid.into_bytes(), vec![0x5a; MAX_MEMO_BYTES]);
+	}
+
+	#[test]
+	fn memo_decode_bound_tracks_the_ledger() {
+		// If the ledger's cap ever moves, this parser must move with it rather than keeping a
+		// stale copy. Reading the constant is what guarantees that; this pins the value the CLI is
+		// compiled against so a change is visible in review.
+		assert_eq!(midnight_node_ledger_helpers::latest::zswap::MAX_MEMO_BYTES, 512);
 	}
 
 	// `contract_address_decode` — untagged per ADR-0022.

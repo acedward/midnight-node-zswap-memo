@@ -316,6 +316,14 @@ pub struct SingleTxArgs {
 	/// `largest-first` minimizes the number of inputs; `smallest-first` consolidates dust.
 	#[arg(long, value_parser = cli::coin_selection_strategy, default_value = "largest-first")]
 	pub coin_selection: CoinSelectionStrategy,
+	/// Attach a memo to the shielded spend, as hex (1..=512 bytes).
+	///
+	/// The memo is committed to in the spend proof, so it is authorized by the same secret that
+	/// authorizes the spend and cannot be altered or removed in transit. It rides on the first
+	/// selected input: one message per spender, rather than the same text repeated on every coin
+	/// this transfer happens to spend. Requires ledger 9 or later.
+	#[arg(long, value_parser = cli::memo_decode)]
+	pub memo: Option<cli::MemoArg>,
 }
 #[derive(Args, Clone, Debug)]
 pub struct RegisterDustAddressArgs {
@@ -533,6 +541,8 @@ pub enum BuilderConstructionError {
 	NoContext,
 	#[error("internal error: version mismatch in fork context")]
 	VersionMismatch,
+	#[error("invalid single-tx request: {0}")]
+	InvalidSingleTx(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
 impl From<BuilderConstructionError> for DynamicError {
@@ -790,11 +800,11 @@ impl Builder {
 					},
 					|context| {
 						let prover = Self::make_prover_v8(prover_config);
-						Ok(self_clone.clone().to_builder_v8(Arc::new(context), prover))
+						self_clone.clone().to_builder_v8(Arc::new(context), prover)
 					},
 					|context| {
 						let prover = Self::make_prover(prover_config);
-						Ok(self.to_builder_v9(Arc::new(context), prover))
+						self.to_builder_v9(Arc::new(context), prover)
 					},
 				)
 			},
@@ -835,7 +845,7 @@ impl Builder {
 		self,
 		context: Arc<LedgerContext<DefaultDB>>,
 		prover: Arc<dyn ProofProvider<DefaultDB>>,
-	) -> Box<dyn BuildTxs<Error = DynamicError>> {
+	) -> Result<Box<dyn BuildTxs<Error = DynamicError>>, BuilderConstructionError> {
 		fn constr(
 			builder: impl BuildTxs + Send + Sync + 'static,
 		) -> Box<dyn BuildTxs<Error = DynamicError>> {
@@ -844,7 +854,7 @@ impl Builder {
 
 		use builders::ledger_9 as v9;
 
-		match self {
+		Ok(match self {
 			Builder::Batches(args) => constr(v9::BatchesBuilder::new(args, context, prover)),
 			Builder::ContractSimple(call) => match call {
 				ContractCall::Deploy(args) => {
@@ -864,7 +874,9 @@ impl Builder {
 				constr(v9::ClaimRewardsBuilder::new(args, context, prover))
 			},
 			Builder::SingleTx(args) => {
-				constr(v9::single_tx::SingleTxBuilder::new(args, context, prover))
+				let builder = v9::single_tx::SingleTxBuilder::new(args, context, prover)
+					.map_err(|error| BuilderConstructionError::InvalidSingleTx(Box::new(error)))?;
+				constr(builder)
 			},
 			Builder::RegisterDustAddress(args) => {
 				constr(v9::RegisterDustAddressBuilder::new(args, context, prover))
@@ -876,7 +888,7 @@ impl Builder {
 				constr(v9::batch_single_tx::BatchSingleTxBuilder::new(args, context, prover))
 			},
 			Builder::Send => constr(v9::DoNothingBuilder::new()),
-		}
+		})
 	}
 
 	fn to_builder_v8(
@@ -891,7 +903,7 @@ impl Builder {
 					midnight_node_ledger_helpers::ledger_8::DefaultDB,
 				>,
 		>,
-	) -> Box<dyn BuildTxs<Error = DynamicError>> {
+	) -> Result<Box<dyn BuildTxs<Error = DynamicError>>, BuilderConstructionError> {
 		fn constr(
 			builder: impl BuildTxs + Send + Sync + 'static,
 		) -> Box<dyn BuildTxs<Error = DynamicError>> {
@@ -900,7 +912,7 @@ impl Builder {
 
 		use builders::ledger_8 as v8;
 
-		match self {
+		Ok(match self {
 			Builder::Batches(args) => constr(v8::BatchesBuilder::new(args, context, prover)),
 			Builder::ContractSimple(call) => match call {
 				ContractCall::Deploy(args) => {
@@ -920,7 +932,9 @@ impl Builder {
 				constr(v8::ClaimRewardsBuilder::new(args, context, prover))
 			},
 			Builder::SingleTx(args) => {
-				constr(v8::single_tx::SingleTxBuilder::new(args, context, prover))
+				let builder = v8::single_tx::SingleTxBuilder::new(args, context, prover)
+					.map_err(|error| BuilderConstructionError::InvalidSingleTx(Box::new(error)))?;
+				constr(builder)
 			},
 			Builder::RegisterDustAddress(args) => {
 				constr(v8::RegisterDustAddressBuilder::new(args, context, prover))
@@ -932,7 +946,7 @@ impl Builder {
 				constr(v8::batch_single_tx::BatchSingleTxBuilder::new(args, context, prover))
 			},
 			Builder::Send => constr(v8::DoNothingBuilder::new()),
-		}
+		})
 	}
 
 	fn to_builder_v7(
@@ -979,7 +993,9 @@ impl Builder {
 				constr(v7::ClaimRewardsBuilder::new(args, context, prover))
 			},
 			Builder::SingleTx(args) => {
-				constr(v7::single_tx::SingleTxBuilder::new(args, context, prover))
+				let builder = v7::single_tx::SingleTxBuilder::new(args, context, prover)
+					.map_err(|error| BuilderConstructionError::InvalidSingleTx(Box::new(error)))?;
+				constr(builder)
 			},
 			Builder::RegisterDustAddress(args) => {
 				constr(v7::RegisterDustAddressBuilder::new(args, context, prover))

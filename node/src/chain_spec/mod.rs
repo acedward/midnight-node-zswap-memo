@@ -269,6 +269,12 @@ fn genesis_config<T: MidnightNetwork>(genesis: T) -> Result<serde_json::Value, C
 		midnight: MidnightConfig {
 			_config: Default::default(),
 			network_id: genesis.network_id(),
+			// Every network this repository builds a chain spec for is a fresh chain, so memos
+			// are active from genesis and nothing about today's behaviour changes. Upgrading an
+			// *existing* chain is a different operation: it must set a future height with at
+			// least the finality lag of margin (spec FR-008), which a chain spec cannot do
+			// retroactively — that value arrives through a runtime upgrade.
+			memo_activation_height: 0,
 			genesis_state_key: midnight_node_ledger::ledger_9::storage::get_root(
 				genesis.genesis_state(),
 				Some(&genesis.network_id()),

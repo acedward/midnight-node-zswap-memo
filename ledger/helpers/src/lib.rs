@@ -39,6 +39,32 @@ pub enum CoinSelectionStrategy {
 /// To be deserialized when constructing ContractOperations
 pub struct ContractVerifyingKeyBytes(pub Vec<u8>);
 
+/// Raised when a shielded spend cannot be constructed as asked.
+///
+/// Memos arrived with ledger 9. Earlier generations have no field to carry one, so asking for a
+/// memo there is refused rather than panicking or silently dropping the message.
+#[derive(Debug, thiserror::Error)]
+pub enum ShieldedSpendError {
+	#[error("zswap input memos require ledger 9 or later, but this is ledger {version}")]
+	MemoUnsupportedLedger { version: u32 },
+	/// The memo bytes are outside the 1..=512 the ledger accepts. Returned rather than panicking:
+	/// the size comes from user input (a `--memo` argument, an RPC field), so an out-of-range
+	/// value is an ordinary bad request, not a broken invariant.
+	#[error("invalid memo: {0}")]
+	InvalidMemo(String),
+	/// A direct input request named a nullifier that is not present in the source wallet.
+	#[error("no shielded coin matches the requested nullifier")]
+	ShieldedCoinNotFoundByNullifier,
+	/// A direct input request could not find one coin of the requested token with enough value.
+	#[error("no single shielded coin has at least {minimum_value} units of the requested token")]
+	NoMatchingShieldedCoin { minimum_value: u128 },
+	/// A direct input request names a source wallet that is not registered in the builder context.
+	#[error("source shielded wallet is not registered in the builder context")]
+	SourceWalletNotFound,
+	#[error("{0}")]
+	OfferCreation(String),
+}
+
 #[path = "versions"]
 pub mod ledger_7 {
 	use crate::ContractVerifyingKeyBytes;
@@ -158,6 +184,36 @@ pub mod ledger_7 {
 
 	pub fn maintenance_verifying_key_ecdsa(_key: VerifyingKeyEcdsa) -> SignatureVerifyingKey {
 		unimplemented!("ecdsa is only supported from ledger 9")
+	}
+
+	/// Spends a shielded coin, optionally attaching a memo authorized by the same secret that
+	/// authorizes the spend.
+	///
+	/// Memos arrived with ledger 9; this generation has no field to carry one, so asking for one
+	/// here is refused with a typed error rather than panicking or dropping the message.
+	pub fn validate_shielded_memo(memo: Option<&[u8]>) -> Result<(), crate::ShieldedSpendError> {
+		if memo.is_some() {
+			Err(crate::ShieldedSpendError::MemoUnsupportedLedger { version: LEDGER_VERSION })
+		} else {
+			Ok(())
+		}
+	}
+
+	pub fn shielded_spend<D: ledger_storage::db::DB>(
+		state: &zswap::local::State<D>,
+		rng: &mut rand::rngs::StdRng,
+		secret_keys: &zswap::keys::SecretKeys,
+		coin: &coin_structure::coin::QualifiedInfo,
+		segment: Option<u16>,
+		memo: Option<Vec<u8>>,
+	) -> Result<
+		(zswap::local::State<D>, zswap::Input<transient_crypto::proofs::ProofPreimage, D>),
+		crate::ShieldedSpendError,
+	> {
+		validate_shielded_memo(memo.as_deref())?;
+		state
+			.spend(rng, secret_keys, coin, segment)
+			.map_err(|e| crate::ShieldedSpendError::OfferCreation(e.to_string()))
 	}
 }
 
@@ -279,6 +335,36 @@ pub mod ledger_8 {
 
 	pub fn maintenance_verifying_key_ecdsa(_key: VerifyingKeyEcdsa) -> SignatureVerifyingKey {
 		unimplemented!("ecdsa is only supported from ledger 9")
+	}
+
+	/// Spends a shielded coin, optionally attaching a memo authorized by the same secret that
+	/// authorizes the spend.
+	///
+	/// Memos arrived with ledger 9; this generation has no field to carry one, so asking for one
+	/// here is refused with a typed error rather than panicking or dropping the message.
+	pub fn validate_shielded_memo(memo: Option<&[u8]>) -> Result<(), crate::ShieldedSpendError> {
+		if memo.is_some() {
+			Err(crate::ShieldedSpendError::MemoUnsupportedLedger { version: LEDGER_VERSION })
+		} else {
+			Ok(())
+		}
+	}
+
+	pub fn shielded_spend<D: ledger_storage::db::DB>(
+		state: &zswap::local::State<D>,
+		rng: &mut rand::rngs::StdRng,
+		secret_keys: &zswap::keys::SecretKeys,
+		coin: &coin_structure::coin::QualifiedInfo,
+		segment: Option<u16>,
+		memo: Option<Vec<u8>>,
+	) -> Result<
+		(zswap::local::State<D>, zswap::Input<transient_crypto::proofs::ProofPreimage, D>),
+		crate::ShieldedSpendError,
+	> {
+		validate_shielded_memo(memo.as_deref())?;
+		state
+			.spend(rng, secret_keys, coin, segment)
+			.map_err(|e| crate::ShieldedSpendError::OfferCreation(e.to_string()))
 	}
 }
 
@@ -441,6 +527,43 @@ pub mod ledger_9 {
 		key: base_crypto::ecdsa::VerifyingKey,
 	) -> ContractMaintenanceVerifyingKey {
 		ContractMaintenanceVerifyingKey::ECDSA(key)
+	}
+
+	/// Spends a shielded coin, optionally attaching a memo authorized by the same secret that
+	/// authorizes the spend.
+	///
+	/// The memo is committed to in the spend proof's binding input, so it cannot be altered,
+	/// removed, or moved to another input without invalidating the proof.
+	///
+	/// An out-of-range memo returns [`crate::ShieldedSpendError::InvalidMemo`] and produces no
+	/// input. Callers are expected to check sizes too, but this boundary does not trust them to:
+	/// the bytes originate in user input, so an out-of-range value has to be a typed error rather
+	/// than a panic in whatever process is building the transaction.
+	pub fn validate_shielded_memo(memo: Option<&[u8]>) -> Result<(), crate::ShieldedSpendError> {
+		memo.map(zswap::Memo::try_from)
+			.transpose()
+			.map(|_| ())
+			.map_err(|e| crate::ShieldedSpendError::InvalidMemo(e.to_string()))
+	}
+
+	pub fn shielded_spend<D: ledger_storage::db::DB>(
+		state: &zswap::local::State<D>,
+		rng: &mut rand::rngs::StdRng,
+		secret_keys: &zswap::keys::SecretKeys,
+		coin: &coin_structure::coin::QualifiedInfo,
+		segment: Option<u16>,
+		memo: Option<Vec<u8>>,
+	) -> Result<
+		(zswap::local::State<D>, zswap::Input<transient_crypto::proofs::ProofPreimage, D>),
+		crate::ShieldedSpendError,
+	> {
+		let memo = memo
+			.map(zswap::Memo::new)
+			.transpose()
+			.map_err(|e| crate::ShieldedSpendError::InvalidMemo(e.to_string()))?;
+		state
+			.spend_with_memo(rng, secret_keys, coin, segment, memo)
+			.map_err(|e| crate::ShieldedSpendError::OfferCreation(e.to_string()))
 	}
 }
 
