@@ -36,6 +36,9 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod encoding_corpus;
+
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
 
